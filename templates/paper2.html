@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Paper Trading Combo 24h — Market Tracker</title>
+<title>Paper Trading Score85 — Market Tracker</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
-:root{--bg:#0d0f12;--surface:#13161b;--border:#1e2229;--border2:#252a33;--text:#c8cdd6;--muted:#555e6e;--accent:#38bdf8;--g3:#1a5c35;--g4:#22763f;--g5:#2a9150;--g6:#34b566;--r3:#5c1a1a;--r4:#7a2020;--r5:#9e2a2a;--r6:#c43030;--font-mono:'IBM Plex Mono',monospace;--font-sans:'IBM Plex Sans',sans-serif;}
+:root{--bg:#0d0f12;--surface:#13161b;--border:#1e2229;--border2:#252a33;--text:#c8cdd6;--muted:#555e6e;--accent:#a78bfa;--g3:#1a5c35;--g4:#22763f;--g5:#2a9150;--g6:#34b566;--r3:#5c1a1a;--r4:#7a2020;--r5:#9e2a2a;--r6:#c43030;--font-mono:'IBM Plex Mono',monospace;--font-sans:'IBM Plex Sans',sans-serif;}
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:12px;min-height:100vh;}
 .nav{display:flex;align-items:center;padding:0 24px;background:var(--surface);border-bottom:1px solid var(--border);height:52px;position:sticky;top:0;z-index:100;}
@@ -23,12 +23,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-si
 .mobile-menu{display:none;position:fixed;top:52px;left:0;right:0;z-index:99;background:var(--surface);border-bottom:1px solid var(--border2);padding:12px 16px;flex-direction:column;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
 .mobile-menu.open{display:flex;}
 .mobile-menu .nav-tab{height:auto;padding:10px 12px;border-radius:6px;border:1px solid var(--border2);}
-.mobile-menu .nav-tab.active{background:rgba(56,189,248,0.1);border-color:var(--accent);}
+.mobile-menu .nav-tab.active{background:rgba(167,139,250,0.1);border-color:var(--accent);}
 .mobile-menu-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .mobile-menu .btn{text-align:center;padding:9px 8px;font-size:11px;}
 .mobile-menu-divider{height:1px;background:var(--border2);}
 .main{padding:20px 24px 48px;max-width:1400px;}
-.strategy-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.25);border-radius:8px;padding:10px 16px;margin-bottom:18px;font-family:var(--font-mono);font-size:10px;color:var(--accent);}
+/* Strategy badge */
+.strategy-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.3);border-radius:8px;padding:10px 16px;margin-bottom:18px;font-family:var(--font-mono);font-size:10px;color:var(--accent);}
 .strategy-badge span{color:var(--text);}
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
 .card{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;}
@@ -56,20 +57,16 @@ td:first-child{text-align:left;font-family:var(--font-sans);}
 tr:last-child td{border-bottom:none;}
 tr:hover td{background:#161a21;}
 .pos{color:var(--g5);}.neg{color:var(--r5);}.muted{color:var(--muted);}
+/* Timer bar */
+.timer-wrap{display:flex;align-items:center;gap:6px;}
+.timer-bar-bg{flex:1;height:5px;background:var(--border2);border-radius:3px;min-width:40px;}
+.timer-bar-fill{height:100%;border-radius:3px;transition:width 0.3s;}
+.timer-text{font-size:9px;color:var(--muted);white-space:nowrap;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
 /* Score pill */
 .score-pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:9px;font-weight:700;font-family:var(--font-mono);}
 .score-hi{background:rgba(52,181,102,0.15);color:#34b566;border:1px solid rgba(52,181,102,0.3);}
 .score-vhi{background:rgba(52,181,102,0.25);color:#86efac;border:1px solid rgba(52,181,102,0.4);}
-/* Signal pill */
-.sig-pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;font-family:var(--font-mono);}
-.sig-sb{background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid rgba(56,189,248,0.3);}
-.sig-b{background:rgba(52,181,102,0.12);color:#34b566;border:1px solid rgba(52,181,102,0.25);}
-/* Days bar */
-.days-wrap{display:flex;align-items:center;gap:6px;}
-.days-bar-bg{flex:1;height:5px;background:var(--border2);border-radius:3px;min-width:40px;}
-.days-bar-fill{height:100%;border-radius:3px;transition:width 0.3s;}
-.days-text{font-size:9px;color:var(--muted);white-space:nowrap;}
-@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
 .empty{text-align:center;color:var(--muted);padding:20px;font-family:var(--font-mono);font-size:11px;}
 .btn-sell{background:none;border:1px solid var(--r4);color:var(--r5);font-family:var(--font-mono);font-size:9px;padding:3px 8px;border-radius:3px;cursor:pointer;transition:all 0.15s;}
 .btn-sell:hover{background:var(--r3);border-color:var(--r5);color:#ffaaaa;}
@@ -91,24 +88,27 @@ tr:hover td{background:#161a21;}
   .card-value{font-size:16px;}
   .stats-row{grid-template-columns:1fr 1fr;gap:8px;}
   .stat-card-value{font-size:14px;}
+  /* Strategy badge wraps */
   .strategy-badge{flex-wrap:wrap;gap:6px;font-size:9.5px;}
-  table{min-width:520px;}
+  /* Tables scroll + bigger tap */
+  table{min-width:480px;}
   th,td{padding:7px 8px;font-size:10.5px;}
   .btn-sell{padding:5px 10px;font-size:10px;}
-  .days-wrap{gap:4px;}
-  .days-text{font-size:8.5px;}
+  /* Timer bar stays visible */
+  .timer-wrap{gap:4px;}
+  .timer-text{font-size:8.5px;}
 }
 </style>
 </head>
 <body>
 
-<div id="loading"><div class="spinner"></div><p>Cargando paper trading Combo 24h…</p></div>
+<div id="loading"><div class="spinner"></div><p>Cargando paper trading Score85…</p></div>
 
 <nav class="nav">
   <span class="nav-brand">Market Tracker</span>
   <a class="nav-tab" href="/">📊 Mercado</a>
-  <a class="nav-tab" href="/paper2">⚡ Score85</a>
-  <a class="nav-tab active" href="/paper4">🎯 Combo 24h</a>
+  <a class="nav-tab active" href="/paper2">⚡ Score85</a>
+  <a class="nav-tab" href="/paper4">🎯 Combo 24h</a>
   <div class="nav-right">
     <span id="last-update" style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">—</span>
     <button class="btn" onclick="loadData()">↺ Actualizar</button>
@@ -119,20 +119,20 @@ tr:hover td{background:#161a21;}
 
 <div class="mobile-menu" id="mobile-menu">
   <a class="nav-tab" href="/">📊 Mercado</a>
-  <a class="nav-tab" href="/paper2">⚡ Score85</a>
-  <a class="nav-tab active" href="/paper4">🎯 Combo 24h</a>
+  <a class="nav-tab active" href="/paper2">⚡ Score85</a>
+  <a class="nav-tab" href="/paper4">🎯 Combo 24h</a>
   <div class="mobile-menu-divider"></div>
   <div class="mobile-menu-grid">
     <button class="btn" onclick="loadData();closeMobileMenu()">↺ Actualizar</button>
-    <button class="btn btn-danger" onclick="resetPaper();closeMobileMenu()">⚠ Reset Combo 24h</button>
+    <button class="btn btn-danger" onclick="resetPaper();closeMobileMenu()">⚠ Reset Score85</button>
   </div>
 </div>
 <div class="main">
 
   <div class="strategy-badge">
-    🎯 Estrategia Combo 24h Score + Signal &nbsp;—&nbsp;
-    <span>Score ≥ 80 AND Signal compra/compra fuerte</span> &nbsp;·&nbsp;
-    <span>Vende a las 24h si positivo · SL -7% · TP +10% · cooldown 48h tras stop</span> &nbsp;·&nbsp;
+    ⚡ Estrategia Score85 · 24h &nbsp;—&nbsp;
+    <span>Compra cuando Score ≥ 85</span> &nbsp;·&nbsp;
+    <span>Vende automáticamente a las 24h</span> &nbsp;·&nbsp;
     <span>20% del capital por posición</span>
   </div>
 
@@ -147,30 +147,29 @@ tr:hover td{background:#161a21;}
     <div class="stat-card"><div class="stat-card-label">Win rate</div><div class="stat-card-value" id="s-winrate">—</div><div class="stat-card-sub" id="s-winrate-sub">sin ops. cerradas</div></div>
     <div class="stat-card"><div class="stat-card-label">Media ganancia / pérdida</div><div class="stat-card-value" id="s-avg">—</div><div class="stat-card-sub" id="s-avg-sub">por operación</div></div>
     <div class="stat-card"><div class="stat-card-label">Mejor / peor trade</div><div class="stat-card-value" id="s-best">—</div><div class="stat-card-sub" id="s-best-sub">—</div></div>
-    <div class="stat-card"><div class="stat-card-label">Retorno medio 24h</div><div class="stat-card-value" id="s-avgtr">—</div><div class="stat-card-sub" id="s-avgtr-sub">por operación cerrada</div></div>
+    <div class="stat-card"><div class="stat-card-label">Retorno medio 24h</div><div class="stat-card-value" id="s-avg24">—</div><div class="stat-card-sub" id="s-avg24-sub">por operación cerrada</div></div>
   </div>
 
   <div class="chart-wrap">
     <div class="chart-header">
-      <div class="chart-title">Evolución del capital — Combo 24h</div>
+      <div class="chart-title">Evolución del capital — Score85 · 24h</div>
     </div>
     <canvas id="equity-chart"></canvas>
   </div>
 
-  <div class="section-title">🎯 Posiciones abiertas</div>
+  <div class="section-title">⚡ Posiciones abiertas</div>
   <div class="table-wrap">
     <table>
       <thead><tr>
         <th>Activo</th>
-        <th>Score</th>
-        <th>Signal</th>
+        <th>Score entrada</th>
         <th>P. entrada</th>
         <th>P. actual</th>
         <th>Ret.</th>
         <th>Tiempo restante</th>
         <th></th>
       </tr></thead>
-      <tbody id="open-body"><tr><td colspan="8" class="empty">Sin posiciones abiertas. Se abrirán cuando Score ≥ 80 y Signal sea compra.</td></tr></tbody>
+      <tbody id="open-body"><tr><td colspan="7" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ 85.</td></tr></tbody>
     </table>
   </div>
 
@@ -180,72 +179,56 @@ tr:hover td{background:#161a21;}
       <thead><tr>
         <th>Activo</th>
         <th>Score</th>
-        <th>Signal</th>
         <th>Entrada</th>
         <th>Salida</th>
         <th>P. entrada</th>
         <th>P. salida</th>
-        <th>Horas</th>
-        <th>Ret.</th>
+        <th>Ret. 24h</th>
         <th>P&amp;L</th>
         <th>Motivo</th>
       </tr></thead>
-      <tbody id="closed-body"><tr><td colspan="11" class="empty">Aún no hay operaciones cerradas.</td></tr></tbody>
+      <tbody id="closed-body"><tr><td colspan="9" class="empty">Aún no hay operaciones cerradas. Las posiciones se cierran automáticamente a las 24h.</td></tr></tbody>
     </table>
   </div>
 
 </div>
 
 <script>
-var INITIAL_CAP = 10000;
+function toggleMobileMenu(){var m=document.getElementById("mobile-menu");m.classList.toggle("open");document.getElementById("hamburger-btn").textContent=m.classList.contains("open")?"✕":"☰";}
+function closeMobileMenu(){document.getElementById("mobile-menu").classList.remove("open");document.getElementById("hamburger-btn").textContent="☰";}
+document.addEventListener("click",function(e){var m=document.getElementById("mobile-menu"),b=document.getElementById("hamburger-btn");if(m.classList.contains("open")&&!m.contains(e.target)&&!b.contains(e.target))closeMobileMenu();});
 
-function fmtE(v){return"€"+v.toLocaleString("es-ES",{minimumFractionDigits:2,maximumFractionDigits:2});}
-function fmt(v){if(v==null)return"—";return(v>=0?"+":"")+v.toFixed(2)+"%";}
+function fmt(v){return(v>=0?"+":"")+v.toFixed(2)+"%";}
+function fmtE(v){return"€"+v.toLocaleString("es-ES",{minimumFractionDigits:0,maximumFractionDigits:0});}
 function cc(v){return v>0?"pos":v<0?"neg":"muted";}
-
-function toggleMobileMenu(){
-  var m=document.getElementById("mobile-menu");
-  m.classList.toggle("open");
-  document.getElementById("hamburger-btn").textContent=m.classList.contains("open")?"✕":"☰";
-}
-function closeMobileMenu(){
-  document.getElementById("mobile-menu").classList.remove("open");
-  document.getElementById("hamburger-btn").textContent="☰";
-}
 
 function scorePill(s){
   if(s==null||s==="—")return"—";
-  var cls=s>=85?"score-vhi":"score-hi";
+  var cls=s>=90?"score-vhi":"score-hi";
   return'<span class="score-pill '+cls+'">'+s+'</span>';
-}
-
-function signalPill(s){
-  if(!s)return"—";
-  if(s==="strong_buy")return'<span class="sig-pill sig-sb">★ Compra fuerte</span>';
-  if(s==="buy")return'<span class="sig-pill sig-b">▲ Compra</span>';
-  return'<span style="color:var(--muted);font-size:10px">'+s+'</span>';
 }
 
 function timerBar(hoursLeft, totalHours, waitingRecovery){
   if(waitingRecovery){
-    return'<div class="days-wrap">'+
-      '<div class="days-bar-bg"><div class="days-bar-fill" style="width:100%;background:#f59e0b;animation:pulse 1.5s ease-in-out infinite"></div></div>'+
-      '<span class="days-text" style="color:#f59e0b">Esperando +</span>'+
+    // Past 24h, negative, waiting to recover to positive
+    return'<div class="timer-wrap">'+
+      '<div class="timer-bar-bg"><div class="timer-bar-fill" style="width:100%;background:#f59e0b;animation:pulse 1.5s ease-in-out infinite"></div></div>'+
+      '<span class="timer-text" style="color:#f59e0b">Esperando +</span>'+
     '</div>';
   }
   var pct=Math.max(0,Math.min(100,(hoursLeft/totalHours)*100));
-  var col=pct>50?"#38bdf8":pct>20?"#fbbf24":"#e05252";
+  var col=pct>50?"#34b566":pct>20?"#fbbf24":"#e05252";
   var h=Math.floor(hoursLeft), m=Math.round((hoursLeft-h)*60);
   var label=h+"h "+m+"m";
-  return'<div class="days-wrap"><div class="days-bar-bg"><div class="days-bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div><span class="days-text">'+label+'</span></div>';
+  return'<div class="timer-wrap"><div class="timer-bar-bg"><div class="timer-bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div><span class="timer-text">'+label+'</span></div>';
 }
 
 function computeStats(closed){
   var wr=document.getElementById("s-winrate"),wrs=document.getElementById("s-winrate-sub");
   var av=document.getElementById("s-avg"),avs=document.getElementById("s-avg-sub");
   var be=document.getElementById("s-best"),bes=document.getElementById("s-best-sub");
-  var at=document.getElementById("s-avgtr"),ats=document.getElementById("s-avgtr-sub");
-  if(!closed||!closed.length){wr.textContent="—";av.textContent="—";be.textContent="—";at.textContent="—";wrs.textContent="sin operaciones cerradas";return;}
+  var a24=document.getElementById("s-avg24"),a24s=document.getElementById("s-avg24-sub");
+  if(!closed||!closed.length){wr.textContent="—";av.textContent="—";be.textContent="—";a24.textContent="—";wrs.textContent="sin operaciones cerradas";return;}
   var wins=closed.filter(function(t){return t.ret_pct>0;});
   var losses=closed.filter(function(t){return t.ret_pct<=0;});
   var rate=Math.round(wins.length/closed.length*100);
@@ -261,8 +244,8 @@ function computeStats(closed){
   else{av.textContent=avgL.toFixed(2)+"%";av.className="stat-card-value neg";}
   be.textContent="+"+best.ret_pct.toFixed(2)+"%"; be.className="stat-card-value pos";
   bes.textContent="mejor: "+best.name+" · peor: "+worst.ret_pct.toFixed(2)+"%";
-  at.textContent=(allRet>=0?"+":"")+allRet.toFixed(2)+"%"; at.className="stat-card-value "+(allRet>=0?"pos":"neg");
-  ats.textContent="media de "+closed.length+" operación"+(closed.length!==1?"es":"");
+  a24.textContent=(allRet>=0?"+":"")+allRet.toFixed(2)+"%"; a24.className="stat-card-value "+(allRet>=0?"pos":"neg");
+  a24s.textContent="media de "+closed.length+" operación"+(closed.length!==1?"es":"");
 }
 
 function drawChart(log){
@@ -279,23 +262,23 @@ function drawChart(log){
   var pT=12,pB=14,pH=4;
   function toY(v){return pT+(1-(v-minV)/range)*(H-pT-pB);}
   function toX(i,n){return pH+(i/(n-1))*(W-pH*2);}
-  var baseY=toY(INITIAL_CAP);
+  var baseY=toY(10000);
   ctx.beginPath();ctx.setLineDash([3,4]);ctx.strokeStyle="#252a33";ctx.lineWidth=1;ctx.moveTo(0,baseY);ctx.lineTo(W,baseY);ctx.stroke();ctx.setLineDash([]);
+  var isUp=vals[vals.length-1]>=10000,col=isUp?"#2a9150":"#9e2a2a";
   ctx.beginPath();
   vals.forEach(function(v,i){var x=toX(i,vals.length),y=toY(v);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
-  ctx.strokeStyle="#38bdf8";ctx.lineWidth=2;ctx.stroke();
+  ctx.strokeStyle="#a78bfa";ctx.lineWidth=2;ctx.stroke();
   var lx=toX(vals.length-1,vals.length);
   ctx.lineTo(lx,H);ctx.lineTo(pH,H);ctx.closePath();
-  ctx.fillStyle="rgba(56,189,248,0.07)";ctx.fill();
+  ctx.fillStyle="rgba(167,139,250,0.08)";ctx.fill();
   ctx.font="9px IBM Plex Mono";ctx.fillStyle="#555e6e";ctx.textAlign="left";
   ctx.fillText(fmtE(maxV),4,pT+8);ctx.fillText(fmtE(minV),4,H-3);
 }
 
 function loadData(){
-  fetch("/api/paper4").then(function(r){return r.json();}).then(function(d){
+  fetch("/api/paper2").then(function(r){return r.json();}).then(function(d){
     if(d.error){document.getElementById("loading").querySelector("p").textContent="Esperando datos del mercado…";return;}
     document.getElementById("loading").style.display="none";
-    INITIAL_CAP=d.initial||10000;
     document.getElementById("c-cash").textContent=fmtE(d.capital);
     document.getElementById("c-open").textContent=fmtE(d.open_value);
     document.getElementById("c-open-n").textContent=d.open.length+" posición"+(d.open.length!==1?"es":"")+" abierta"+(d.open.length!==1?"s":"");
@@ -307,13 +290,12 @@ function loadData(){
     // Open positions
     var ob=document.getElementById("open-body");
     if(!d.open||!d.open.length){
-      ob.innerHTML='<tr><td colspan="8" class="empty">Sin posiciones abiertas. Se abrirán cuando Score ≥ '+d.min_score+' y Signal sea compra o compra fuerte.</td></tr>';
+      ob.innerHTML='<tr><td colspan="7" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ '+d.min_score+'.</td></tr>';
     } else {
       ob.innerHTML=d.open.map(function(p){
         return'<tr>'+
           '<td>'+p.name+' <span class="muted" style="font-size:9px">'+p.ticker+'</span></td>'+
           '<td>'+scorePill(p.entry_score)+'</td>'+
-          '<td>'+signalPill(p.entry_signal)+'</td>'+
           '<td>€'+p.entry_price+'</td>'+
           '<td>€'+p.current_price+'</td>'+
           '<td class="'+cc(p.ret_pct)+'">'+fmt(p.ret_pct)+'</td>'+
@@ -326,24 +308,20 @@ function loadData(){
     // Closed trades
     var cb=document.getElementById("closed-body");
     if(!d.closed||!d.closed.length){
-      cb.innerHTML='<tr><td colspan="10" class="empty">Aún no hay operaciones cerradas.</td></tr>';
+      cb.innerHTML='<tr><td colspan="9" class="empty">Aún no hay operaciones cerradas. Las posiciones se cierran automáticamente a las 24h.</td></tr>';
     } else {
       cb.innerHTML=d.closed.map(function(t){
         var cls=cc(t.ret_pct);
-        var reasonColor=t.reason&&t.reason.indexOf("Stop")===0?"#e05252":
-                        t.reason&&t.reason.indexOf("Take")===0?"#34b566":"var(--muted)";
         return'<tr>'+
           '<td>'+t.name+' <span class="muted" style="font-size:9px">'+t.ticker+'</span></td>'+
           '<td>'+scorePill(t.entry_score)+'</td>'+
-          '<td>'+signalPill(t.entry_signal)+'</td>'+
           '<td class="muted">'+t.entry_date+'</td>'+
           '<td class="muted">'+t.exit_date+'</td>'+
           '<td>€'+t.entry_price+'</td>'+
           '<td>€'+t.exit_price+'</td>'+
-          '<td class="muted">'+(t.hours_held!=='—'?t.hours_held+'h':'—')+'</td>'+
           '<td class="'+cls+'">'+fmt(t.ret_pct)+'</td>'+
           '<td class="'+cls+'">'+(t.pnl>=0?"+":"")+'€'+t.pnl.toFixed(0)+'</td>'+
-          '<td style="font-size:10px;color:'+reasonColor+'">'+t.reason+'</td>'+
+          '<td class="muted" style="font-size:10px;color:'+(t.reason&&t.reason.indexOf('Stop')===0?'#e05252':'var(--muted)')+'">'+t.reason+'</td>'+
         '</tr>';
       }).join("");
     }
@@ -355,19 +333,19 @@ function loadData(){
 function sellPosition(ticker,btn){
   if(!confirm("¿Vender "+ticker+" manualmente?"))return;
   btn.disabled=true;btn.textContent="…";
-  fetch("/api/paper4/sell",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticker:ticker,reason:"Venta manual"})})
+  fetch("/api/paper2/sell",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticker:ticker,reason:"Venta manual"})})
     .then(function(r){return r.json();}).then(function(d){if(d.error){alert("Error: "+d.error);btn.disabled=false;btn.textContent="Vender";return;}loadData();})
     .catch(function(){btn.disabled=false;btn.textContent="Vender";});
 }
 
 function resetPaper(){
-  if(!confirm("¿Resetear el paper trading Combo 24h?"))return;
-  fetch("/api/paper4/reset",{method:"POST"}).then(function(){loadData();});
+  if(!confirm("¿Resetear el paper trading Score85?"))return;
+  fetch("/api/paper2/reset",{method:"POST"}).then(function(){loadData();});
 }
 
 loadData();
 setInterval(loadData,30000);
-window.addEventListener("resize",function(){fetch("/api/paper4").then(function(r){return r.json();}).then(function(d){if(d.equity_log)drawChart(d.equity_log);});});
+window.addEventListener("resize",function(){fetch("/api/paper2").then(function(r){return r.json();}).then(function(d){if(d.equity_log)drawChart(d.equity_log);});});
 </script>
 </body>
 </html>
