@@ -1,133 +1,145 @@
 {
-  "capital": 8110.0,
-  "open": [
-    {
-      "ticker": "ARGT",
-      "name": "Argentina",
-      "entry_date": "2026-03-16 15:54",
-      "entry_price": 85.69,
-      "current_price": 85.78,
-      "shares": 23.665,
-      "ret_pct": 0.11,
-      "hours_held": 0.1,
-      "hours_left": 23.9,
-      "entry_score": 88,
-      "score": 88,
-      "waiting_recovery": false
-    }
-  ],
+  "capital": 8114.49,
   "closed": [
     {
-      "ticker": "ECH",
-      "name": "Chile",
-      "entry_date": "2026-03-13 17:59",
-      "exit_date": "2026-03-16 13:46",
-      "entry_price": 38.96,
-      "exit_price": 39.98,
-      "shares": 51.335,
-      "ret_pct": 2.62,
-      "pnl": 11,
-      "reason": "24h cumplidas (67.8h)",
-      "entry_score": 87,
-      "hours_held": 67.8
-    },
-    {
-      "ticker": "ARGT",
-      "name": "Argentina",
-      "entry_date": "2026-03-13 17:59",
-      "exit_date": "2026-03-16 13:46",
-      "entry_price": 85.33,
-      "exit_price": 86.1,
-      "shares": 23.437,
-      "ret_pct": 0.9,
-      "pnl": 5,
-      "reason": "24h cumplidas (67.8h)",
-      "entry_score": 87,
-      "hours_held": 67.8
-    },
-    {
-      "ticker": "EUFN",
-      "name": "EU Banks",
-      "entry_date": "2026-03-13 17:09",
-      "exit_date": "2026-03-16 13:46",
-      "entry_price": 33.79,
-      "exit_price": 34.28,
-      "shares": 59.189,
-      "ret_pct": 1.45,
-      "pnl": 10,
-      "reason": "24h cumplidas (68.6h)",
+      "entry_date": "2026-03-16 14:42",
+      "entry_price": 85.39,
       "entry_score": 88,
-      "hours_held": 68.6
+      "exit_date": "2026-03-16 15:54",
+      "exit_price": 85.72,
+      "hours_held": 1.2,
+      "name": "Argentina",
+      "pnl": 7.83,
+      "reason": "Venta manual",
+      "ret_pct": 0.39,
+      "shares": 23.738786,
+      "ticker": "ARGT"
     },
     {
-      "ticker": "XLF",
-      "name": "Financials",
+      "entry_date": "2026-03-13 18:42",
+      "entry_price": 38.95,
+      "entry_score": 87,
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 39.97,
+      "hours_held": 67.2,
+      "name": "Chile",
+      "pnl": 8.79,
+      "reason": "24h cumplidas (67.2h)",
+      "ret_pct": 2.62,
+      "shares": 8.614745,
+      "ticker": "ECH"
+    },
+    {
+      "entry_date": "2026-03-13 18:42",
+      "entry_price": 85.55,
+      "entry_score": 87,
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 86.18,
+      "hours_held": 67.2,
+      "name": "Argentina",
+      "pnl": 3.09,
+      "reason": "24h cumplidas (67.2h)",
+      "ret_pct": 0.74,
+      "shares": 4.902752,
+      "ticker": "ARGT"
+    },
+    {
+      "entry_date": "2026-03-13 18:42",
+      "entry_price": 79.21,
+      "entry_score": 87,
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 79.57,
+      "hours_held": 67.2,
+      "name": "High Yield",
+      "pnl": 2.38,
+      "reason": "24h cumplidas (67.2h)",
+      "ret_pct": 0.45,
+      "shares": 6.618962,
+      "ticker": "HYG"
+    },
+    {
       "entry_date": "2026-03-13 17:09",
-      "exit_date": "2026-03-16 13:46",
+      "entry_price": 33.79,
+      "entry_score": 88,
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 34.33,
+      "hours_held": 68.8,
+      "name": "EU Banks",
+      "pnl": 10.47,
+      "reason": "24h cumplidas (68.8h)",
+      "ret_pct": 1.6,
+      "shares": 19.395087,
+      "ticker": "EUFN"
+    },
+    {
+      "entry_date": "2026-03-13 17:09",
       "entry_price": 49.05,
-      "exit_price": 49.43,
-      "shares": 40.775,
-      "ret_pct": 0.77,
-      "pnl": 5,
-      "reason": "24h cumplidas (68.6h)",
       "entry_score": 86,
-      "hours_held": 68.6
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 49.49,
+      "hours_held": 68.8,
+      "name": "Financials",
+      "pnl": 7.35,
+      "reason": "24h cumplidas (68.8h)",
+      "ret_pct": 0.9,
+      "shares": 16.701325,
+      "ticker": "XLF"
     },
     {
-      "ticker": "^NSEI",
-      "name": "India (Nifty)",
-      "entry_date": "2026-03-13 17:09",
-      "exit_date": "2026-03-16 13:46",
-      "entry_price": 23151.1,
-      "exit_price": 23408.8,
-      "shares": 0.086,
-      "ret_pct": 1.11,
-      "pnl": 11,
-      "reason": "24h cumplidas (68.6h)",
-      "entry_score": 86,
-      "hours_held": 68.6
-    },
-    {
-      "ticker": "GBPUSD=X",
-      "name": "GBP/USD",
-      "entry_date": "2026-03-13 17:09",
-      "exit_date": "2026-03-16 13:46",
-      "entry_price": 1.32,
-      "exit_price": 1.33,
-      "shares": 1515.15,
-      "ret_pct": 0.76,
-      "pnl": 10,
-      "reason": "24h cumplidas (68.6h)",
-      "entry_score": 86,
-      "hours_held": 68.6
-    },
-    {
-      "ticker": "EWW",
-      "name": "Mexico",
       "entry_date": "2026-03-12 18:31",
-      "exit_date": "2026-03-16 13:46",
       "entry_price": 72.25,
-      "exit_price": 73.88,
-      "shares": 27.666,
-      "ret_pct": 2.26,
-      "pnl": 36,
-      "reason": "24h cumplidas (91.3h)",
       "entry_score": 86,
-      "hours_held": 91.3
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 73.65,
+      "hours_held": 91.4,
+      "name": "Mexico",
+      "pnl": 31.0,
+      "reason": "24h cumplidas (91.4h)",
+      "ret_pct": 1.94,
+      "shares": 22.145329,
+      "ticker": "EWW"
     },
     {
-      "ticker": "VNM",
-      "name": "Vietnam",
       "entry_date": "2026-03-12 18:31",
-      "exit_date": "2026-03-16 13:46",
       "entry_price": 16.83,
-      "exit_price": 17.24,
-      "shares": 118.835,
-      "ret_pct": 2.44,
-      "pnl": 49,
-      "reason": "24h cumplidas (91.3h)",
       "entry_score": 91,
-      "hours_held": 91.3
+      "exit_date": "2026-03-16 13:56",
+      "exit_price": 17.26,
+      "hours_held": 91.4,
+      "name": "Vietnam",
+      "pnl": 51.1,
+      "reason": "24h cumplidas (91.4h)",
+      "ret_pct": 2.55,
+      "shares": 118.835413,
+      "ticker": "VNM"
+    },
+    {
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 23151.1,
+      "entry_score": 86,
+      "exit_date": "2026-03-16 12:07",
+      "exit_price": 23408.8,
+      "hours_held": 67.0,
+      "name": "India (Nifty)",
+      "pnl": 11.4,
+      "reason": "24h cumplidas (67.0h)",
+      "ret_pct": 1.11,
+      "shares": 0.044231,
+      "ticker": "^NSEI"
+    },
+    {
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 1.32,
+      "entry_score": 86,
+      "exit_date": "2026-03-16 12:07",
+      "exit_price": 1.33,
+      "hours_held": 67.0,
+      "name": "GBP/USD",
+      "pnl": 9.7,
+      "reason": "24h cumplidas (67.0h)",
+      "ret_pct": 0.76,
+      "shares": 969.69697,
+      "ticker": "GBPUSD=X"
     }
   ],
   "equity_log": [
@@ -137,23 +149,71 @@
     },
     {
       "date": "2026-03-13 17:09",
-      "equity": 9993.0
+      "equity": 9992.97
     },
     {
-      "date": "2026-03-13 17:59",
-      "equity": 9983.0
+      "date": "2026-03-13 17:22",
+      "equity": 10008.93
     },
     {
-      "date": "2026-03-16 13:46",
-      "equity": 10140.0
+      "date": "2026-03-13 18:42",
+      "equity": 9976.55
+    },
+    {
+      "date": "2026-03-14 13:21",
+      "equity": 9963.67
+    },
+    {
+      "date": "2026-03-16 12:07",
+      "equity": 9984.76
+    },
+    {
+      "date": "2026-03-16 13:56",
+      "equity": 10135.27
+    },
+    {
+      "date": "2026-03-16 14:42",
+      "equity": 10135.27
+    },
+    {
+      "date": "2026-03-16 15:19",
+      "equity": 10148.81
     },
     {
       "date": "2026-03-16 15:54",
-      "equity": 10140.0
+      "equity": 10143.11
+    },
+    {
+      "date": "2026-03-16 16:15",
+      "equity": 10154.94
+    },
+    {
+      "date": "2026-03-16 16:46",
+      "equity": 10148.32
+    },
+    {
+      "date": "2026-03-16 17:20",
+      "equity": 10143.58
     }
   ],
   "cooldowns": {},
   "hold_hours": 24,
   "initial": 10000.0,
-  "min_score": 85
+  "min_score": 85,
+  "open": [
+    {
+      "current_price": 85.74,
+      "entry_date": "2026-03-16 15:54",
+      "entry_price": 85.72,
+      "entry_score": 88,
+      "hours_held": 1.4,
+      "hours_left": 22.6,
+      "name": "Argentina",
+      "ret_pct": 0.02,
+      "score": 88,
+      "shares": 23.665676,
+      "ticker": "ARGT",
+      "waiting_recovery": false
+    }
+  ]
 }
