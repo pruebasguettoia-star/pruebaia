@@ -677,7 +677,7 @@ def index():
 # ── PAPER TRADING 2 — Score > 85, salida automática a las 24h ────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.json")
-PAPER2_INITIAL_CAP  = 10000.0
+PAPER2_INITIAL_CAP  = 10147.0
 PAPER2_POSITION_PCT = 0.20   # 20% of capital per trade
 PAPER2_MIN_SCORE    = 85     # minimum inv_score to open a position
 PAPER2_HOLD_HOURS   = 24     # sell exactly 24h after entry
@@ -911,7 +911,7 @@ def api_paper2_sell():
 # Exit:   24h elapsed + ret ≥ 0% | stop loss -7% | take profit +10%
 # Cooldown: 48h after stop loss or RSI exit before re-entering same ticker
 PAPER4_FILE         = os.path.join(os.path.dirname(__file__), "paper4_trades.json")
-PAPER4_INITIAL_CAP  = 10000.0
+PAPER4_INITIAL_CAP  = 10089.0
 PAPER4_POSITION_PCT = 0.20
 PAPER4_MIN_SCORE    = 80
 PAPER4_TAKE_PROFIT  = 10.0
