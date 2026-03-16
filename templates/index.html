@@ -633,7 +633,6 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    margin-left: auto;
   }
 
   @media (max-width: 768px) {
@@ -654,7 +653,7 @@
     .header-left { flex: 1; min-width: 0; }
     .header-left h1 { font-size: 15px; white-space: nowrap; }
     .header-left p  { display: none; }
-    .header-right   { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .header-right   { display: flex; align-items: center; gap: 4px; flex-shrink: 0; overflow: visible; }
     .header-right .refresh-btn { display: none; }
     .date-display   { display: none; }
     .last-updated   { display: none; }
