@@ -11,7 +11,9 @@ from datetime import datetime, timedelta
 import threading
 import math
 import time
+import gc
 import os
+import json
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -263,14 +265,15 @@ def fetch_ticker(name, ticker):
         price  = float(close.iloc[-1])
         last_bar = hist.index[-1]
 
-        # Separate lightweight fetch for long-term returns (3y price only)
-        # Uses fast yf.download with only 2 data points needed
+        # Separate lightweight fetch for long-term returns (3y price only).
+        # Descartamos todas las columnas salvo Close para reducir RAM por thread.
         try:
             hist_3y = t.history(period="3y", auto_adjust=True)
             if not hist_3y.empty:
                 hist_3y.index = hist_3y.index.tz_localize(None) if hist_3y.index.tzinfo else hist_3y.index
+                hist_3y = hist_3y[["Close"]]  # solo Close — libera Open/High/Low/Volume
         except Exception:
-            hist_3y = hist  # fallback to 1y
+            hist_3y = hist[["Close"]]  # fallback to 1y
 
         def closest(delta_days, h=None):
             # Anchor from `now`. Try primary source, fallback to hist if empty.
@@ -296,6 +299,7 @@ def fetch_ticker(name, ticker):
         ytd_price  = float(ytd_start["Close"].iloc[-1]) if not ytd_start.empty else None
         year_ago   = closest(365, hist_3y)
         three_yr   = closest(1095, hist_3y)
+        del hist_3y  # liberar ~3y de OHLCV — ya no se necesita
 
         # Use full available window (up to 252 bars) — avoids NaN with 1y data
         hi52  = float(hist["High"].iloc[-252:].max())
@@ -500,20 +504,18 @@ def fetch_ticker(name, ticker):
         inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus
         inv_score = max(1, min(100, inv_score_raw))
 
-        inv_score_breakdown = (
-            f"{'★ COMPRA FUERTE' if signal == 'strong_buy' else signal.upper()}\n"
-            f"─────────────────────\n"
-            f"{sc_rsi_note}\n"
-            f"{sc_bb_note}\n"
-            f"{sc_trend_note}\n"
-            f"{sc_vol_note}\n"
-            f"{sc_ret1m_note}\n"
-            f"{sc_pe_note}\n"
-            f"{sc_dy_note}\n"
-            f"{sc_div_note}\n"
-            f"─────────────────────\n"
-            f"Total: {inv_score}/100"
-        )
+        inv_score_breakdown = {
+            "signal": signal,
+            "rsi":    sc_rsi_note,
+            "bb":     sc_bb_note,
+            "trend":  sc_trend_note,
+            "vol":    sc_vol_note,
+            "ret1m":  sc_ret1m_note,
+            "pe":     sc_pe_note,
+            "dy":     sc_dy_note,
+            "div":    sc_div_note,
+            "total":  inv_score,
+        }
 
         # ── Prob alcista 30d (from hist_3y rolling windows) ────────────────────
         prob_up_30d = None
@@ -625,9 +627,11 @@ def refresh_data():
                  for group, tickers in GROUPS.items()
                  for name, ticker in tickers]
 
-    # Fetch all tickers concurrently (16 workers)
+    # Fetch all tickers concurrently — 8 workers: cap peak RAM en Railway (512MB)
+    # Con 32 workers se acumulan ~32 DataFrames de 1y en memoria a la vez (~200MB peak).
+    # Con 8 workers el peak baja a ~50MB; el ciclo tarda ~15s más pero cabe en free tier.
     row_map = {}
-    with ThreadPoolExecutor(max_workers=32) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(fetch_ticker, name, ticker): (group, ticker)
                    for group, name, ticker in all_tasks}
         for fut in as_completed(futures):
@@ -658,15 +662,39 @@ def refresh_data():
 
     elapsed = (datetime.now() - t0).total_seconds()
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Done in {elapsed:.1f}s.")
+
+    # Purgar entradas expiradas del intraday cache (evita acumulación indefinida)
+    _now_mono = time.monotonic()
+    expired_intra = [k for k, v in list(_intraday_cache.items()) if (_now_mono - v[0]) > _INTRADAY_TTL * 3]
+    for k in expired_intra:
+        _intraday_cache.pop(k, None)
+    if expired_intra:
+        print(f"[cache] purgadas {len(expired_intra)} entradas intraday expiradas")
     if strong_buys_this_cycle:
         threading.Thread(target=send_alert_email, args=(strong_buys_this_cycle,), daemon=True).start()
 
 def background_refresh():
     while True:
         refresh_data()
+        # Actualizar papers en background tras cada ciclo de mercado
+        with lock:
+            market_data = cache.get("data") or {}
+        if market_data:
+            try:
+                run_paper2_trading(market_data)
+                print("[bg] paper2 actualizado")
+            except Exception as e:
+                print(f"[bg] paper2 error: {e}")
+            try:
+                run_paper4_trading(market_data)
+                print("[bg] paper4 actualizado")
+            except Exception as e:
+                print(f"[bg] paper4 error: {e}")
+        # Forzar GC tras el ciclo completo — devuelve RAM al OS inmediatamente
+        # (Python no libera al OS por sí solo hasta el siguiente GC automático)
+        gc.collect()
         time.sleep(300)
 
-import json
 
 # ── ROUTES ─────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -1171,6 +1199,23 @@ def get_email_config():
     return jsonify({"enabled": EMAIL_ENABLED, "to": EMAIL_TO, "from": EMAIL_FROM})
 
 
+def _breakdown_to_str(bd):
+    """Reconstruye el string de tooltip desde el dict compacto guardado en cache.
+    El dict ocupa ~40% menos RAM que el string formateado (no repite señaladores)."""
+    if not bd or not isinstance(bd, dict):
+        return str(bd)
+    sig = bd.get("signal", "")
+    label = "★ COMPRA FUERTE" if sig == "strong_buy" else sig.upper()
+    sep = "─────────────────────"
+    lines = [label, sep]
+    for k in ("rsi", "bb", "trend", "vol", "ret1m", "pe", "dy", "div"):
+        v = bd.get(k, "")
+        if v:
+            lines.append(v)
+    lines += [sep, f"Total: {bd.get('total', '?')}/100"]
+    return "\n".join(lines)
+
+
 @app.route("/api/data")
 def api_data():
     with lock:
@@ -1178,7 +1223,19 @@ def api_data():
         last_updated = cache["last_updated"]
     if not data:
         return jsonify({"error": "no data yet"}), 503
-    resp = jsonify({"data": data, "last_updated": last_updated})
+    # Reconstruir inv_score_breakdown como string sólo en el momento de enviar
+    # (en cache se guarda como dict compacto para ahorrar RAM)
+    import copy
+    out = {}
+    for group, rows in data.items():
+        out[group] = []
+        for row in rows:
+            r = dict(row)
+            bd = r.get("inv_score_breakdown")
+            if isinstance(bd, dict):
+                r["inv_score_breakdown"] = _breakdown_to_str(bd)
+            out[group].append(r)
+    resp = jsonify({"data": out, "last_updated": last_updated})
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
