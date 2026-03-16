@@ -347,5 +347,30 @@ loadData();
 setInterval(loadData,30000);
 window.addEventListener("resize",function(){fetch("/api/paper2").then(function(r){return r.json();}).then(function(d){if(d.equity_log)drawChart(d.equity_log);});});
 </script>
+
+<!-- Bottom Mobile Nav -->
+<nav style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;background:#13161b;border-top:1px solid #1e2229;height:56px;align-items:stretch;" id="bottom-nav">
+  <a href="/" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#555e6e;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;">
+    <span style="font-size:18px">📊</span><span>Mercado</span>
+  </a>
+  <a href="/paper2" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;color:#38bdf8;background:rgba(56,189,248,0.08);">
+    <span style="font-size:18px">⚡</span><span>Score85</span>
+  </a>
+  <a href="/paper4" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;color:#555e6e;">
+    <span style="font-size:18px">🎯</span><span>Combo 24h</span>
+  </a>
+</nav>
+<script>
+// Show bottom nav only on mobile
+if(window.innerWidth <= 768) {
+  document.getElementById("bottom-nav").style.display = "flex";
+  document.querySelector(".main").style.paddingBottom = "70px";
+}
+window.addEventListener("resize", function(){
+  var bn = document.getElementById("bottom-nav");
+  bn.style.display = window.innerWidth <= 768 ? "flex" : "none";
+  if(window.innerWidth <= 768) document.querySelector(".main").style.paddingBottom = "70px";
+});
+</script>
 </body>
 </html>
