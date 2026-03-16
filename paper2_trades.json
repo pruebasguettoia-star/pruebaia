@@ -1,0 +1,121 @@
+{
+  "capital": 2621.44,
+  "open": [
+    {
+      "ticker": "VNM",
+      "name": "Vietnam",
+      "entry_date": "2026-03-12 18:31",
+      "entry_price": 16.83,
+      "current_price": 16.81,
+      "shares": 118.835413,
+      "ret_pct": -0.12,
+      "hours_held": 22.9,
+      "hours_left": 1.1,
+      "entry_score": 91,
+      "score": 89,
+      "waiting_recovery": false
+    },
+    {
+      "ticker": "EWW",
+      "name": "Mexico",
+      "entry_date": "2026-03-12 18:31",
+      "entry_price": 72.25,
+      "current_price": 72.2,
+      "shares": 22.145329,
+      "ret_pct": -0.07,
+      "hours_held": 22.9,
+      "hours_left": 1.1,
+      "entry_score": 86,
+      "score": 82,
+      "waiting_recovery": false
+    },
+    {
+      "ticker": "GBPUSD=X",
+      "name": "GBP/USD",
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 1.32,
+      "current_price": 1.33,
+      "shares": 969.69697,
+      "ret_pct": 0.76,
+      "hours_held": 0.2,
+      "hours_left": 23.8,
+      "entry_score": 86,
+      "score": 86,
+      "waiting_recovery": false
+    },
+    {
+      "ticker": "^NSEI",
+      "name": "India (Nifty)",
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 23151.1,
+      "current_price": 23151.1,
+      "shares": 0.044231,
+      "ret_pct": 0.0,
+      "hours_held": 0.2,
+      "hours_left": 23.8,
+      "entry_score": 86,
+      "score": 86,
+      "waiting_recovery": false
+    },
+    {
+      "ticker": "XLF",
+      "name": "Financials",
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 49.05,
+      "current_price": 49.12,
+      "shares": 16.701325,
+      "ret_pct": 0.14,
+      "hours_held": 0.2,
+      "hours_left": 23.8,
+      "entry_score": 86,
+      "score": 86,
+      "waiting_recovery": false
+    },
+    {
+      "ticker": "EUFN",
+      "name": "EU Banks",
+      "entry_date": "2026-03-13 17:09",
+      "entry_price": 33.79,
+      "current_price": 33.87,
+      "shares": 19.395087,
+      "ret_pct": 0.24,
+      "hours_held": 0.2,
+      "hours_left": 23.8,
+      "entry_score": 88,
+      "score": 84,
+      "waiting_recovery": false
+    }
+  ],
+  "closed": [],
+  "equity_log": [
+    {
+      "date": "2026-03-12 18:31",
+      "equity": 10000.0
+    },
+    {
+      "date": "2026-03-13 17:09",
+      "equity": 9992.97
+    },
+    {
+      "date": "2026-03-13 17:15",
+      "equity": 9998.23
+    },
+    {
+      "date": "2026-03-13 17:21",
+      "equity": 10008.93
+    },
+    {
+      "date": "2026-03-13 17:21",
+      "equity": 10008.93
+    },
+    {
+      "date": "2026-03-13 17:21",
+      "equity": 10008.93
+    },
+    {
+      "date": "2026-03-13 17:22",
+      "equity": 10008.93
+    }
+  ],
+  "cooldowns": {}
+}
