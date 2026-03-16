@@ -642,7 +642,7 @@
     .header-right .refresh-btn { display: none; }
     .date-display   { display: none; }
     .last-updated   { display: none; }
-    .mob-hamburger  { display: flex !important; }
+    .mob-hamburger  { display: flex; visibility: visible; }
 
     /* ── Main padding — top offset for fixed header + bottom for bottom-nav ── */
     .main { padding: 48px 0 80px; }
@@ -845,7 +845,8 @@
 
   /* ── Hamburger button (index) ── */
   .mob-hamburger {
-    display: none;
+    display: flex;
+    visibility: hidden;
     background: none;
     border: 1px solid var(--border2);
     color: var(--muted);
