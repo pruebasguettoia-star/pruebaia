@@ -1469,8 +1469,20 @@ def api_wake():
     return jsonify({"status": "refreshing"})
 
 # ── MAIN ───────────────────────────────────────────────────────────────────────
+# Lanzar el thread de background al importar el módulo — necesario para gunicorn,
+# que no ejecuta el bloque __main__. Se protege con un flag para evitar doble
+# arranque si Flask usa use_reloader=True en desarrollo.
+_bg_started = False
+def _start_background():
+    global _bg_started
+    if not _bg_started:
+        _bg_started = True
+        t = threading.Thread(target=background_refresh, daemon=True)
+        t.start()
+        print("[boot] background_refresh thread arrancado")
+
+_start_background()
+
 if __name__ == "__main__":
-    t = threading.Thread(target=background_refresh, daemon=True)
-    t.start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
