@@ -620,6 +620,22 @@
   /* ════════════════════════════════════════════════════════
      MOBILE / RESPONSIVE  (≤ 768px)
   ════════════════════════════════════════════════════════ */
+  /* ── Hamburger button (index) ── */
+  .mob-hamburger {
+    display: none;
+    background: none;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    font-size: 18px;
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
   @media (max-width: 768px) {
 
     /* ── Header — fixed so it never moves with horizontal scroll ── */
@@ -642,7 +658,7 @@
     .header-right .refresh-btn { display: none; }
     .date-display   { display: none; }
     .last-updated   { display: none; }
-    .mob-hamburger  { display: flex; visibility: visible; }
+    .mob-hamburger  { display: flex; }
 
     /* ── Main padding — top offset for fixed header + bottom for bottom-nav ── */
     .main { padding: 48px 0 80px; }
@@ -843,22 +859,7 @@
   }
 
 
-  /* ── Hamburger button (index) ── */
-  .mob-hamburger {
-    display: flex;
-    visibility: hidden;
-    background: none;
-    border: 1px solid var(--border2);
-    color: var(--muted);
-    font-size: 18px;
-    width: 36px; height: 36px;
-    border-radius: 6px;
-    cursor: pointer;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-left: auto;
-  }
+
 
   /* ── Index mobile dropdown menu ── */
   .mob-menu {
@@ -979,7 +980,7 @@
     </div>
     <button class="refresh-btn" id="refresh-btn" onclick="triggerRefresh()">↺ Refresh</button>
     <button class="refresh-btn" onclick="openEmailModal()" style="margin-left:6px">✉ Alertas</button>
-    <button id="mob-ham" onclick="toggleMobMenu()" style="display:none;background:none;border:1px solid #252a33;color:#c8cdd6;font-size:20px;width:38px;height:38px;border-radius:6px;cursor:pointer;align-items:center;justify-content:center;flex-shrink:0;margin-left:8px;">☰</button>
+    <button class="mob-hamburger" id="mob-ham" onclick="toggleMobMenu()">☰</button>
   </div>
 </div>
 
@@ -2204,22 +2205,5 @@
     <span>Alertas</span>
   </button>
 </div>
-
-<script>
-// Show hamburger on mobile
-(function(){
-  function checkMobile(){
-    var btn = document.getElementById("mob-ham");
-    if(!btn) return;
-    if(window.innerWidth <= 768){
-      btn.style.display = "flex";
-    } else {
-      btn.style.display = "none";
-    }
-  }
-  checkMobile();
-  window.addEventListener("resize", checkMobile);
-})();
-</script>
 </body>
 </html>
