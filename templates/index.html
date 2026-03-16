@@ -979,7 +979,7 @@
     </div>
     <button class="refresh-btn" id="refresh-btn" onclick="triggerRefresh()">↺ Refresh</button>
     <button class="refresh-btn" onclick="openEmailModal()" style="margin-left:6px">✉ Alertas</button>
-    <button class="mob-hamburger" id="mob-ham" onclick="toggleMobMenu()">☰</button>
+    <button id="mob-ham" onclick="toggleMobMenu()" style="display:none;background:none;border:1px solid #252a33;color:#c8cdd6;font-size:20px;width:38px;height:38px;border-radius:6px;cursor:pointer;align-items:center;justify-content:center;flex-shrink:0;margin-left:8px;">☰</button>
   </div>
 </div>
 
@@ -2204,5 +2204,22 @@
     <span>Alertas</span>
   </button>
 </div>
+
+<script>
+// Show hamburger on mobile
+(function(){
+  function checkMobile(){
+    var btn = document.getElementById("mob-ham");
+    if(!btn) return;
+    if(window.innerWidth <= 768){
+      btn.style.display = "flex";
+    } else {
+      btn.style.display = "none";
+    }
+  }
+  checkMobile();
+  window.addEventListener("resize", checkMobile);
+})();
+</script>
 </body>
 </html>
