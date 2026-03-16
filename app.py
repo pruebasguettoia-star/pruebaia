@@ -668,6 +668,11 @@ def background_refresh():
 
 import json
 
+# ── ROUTES ─────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return render_template("index.html")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ── PAPER TRADING 2 — Score > 85, salida automática a las 24h ────────────────
 # ══════════════════════════════════════════════════════════════════════════════
@@ -901,12 +906,169 @@ def api_paper2_sell():
         save_paper2(pt)
     return jsonify({"status": "sold"})
 
+# ── PAPER TRADING 4 — Combo Score ≥ 80 + Signal buy/strong_buy, salida 24h ───
+# Entry:  inv_score ≥ 80 AND signal in (buy, strong_buy)
+# Exit:   24h elapsed + ret ≥ 0% | stop loss -7% | take profit +10%
+# Cooldown: 48h after stop loss or RSI exit before re-entering same ticker
+PAPER4_FILE         = os.path.join(os.path.dirname(__file__), "paper4_trades.json")
+PAPER4_INITIAL_CAP  = 10000.0
+PAPER4_POSITION_PCT = 0.20
+PAPER4_MIN_SCORE    = 80
+PAPER4_TAKE_PROFIT  = 10.0
+PAPER4_STOP_LOSS    = -7.0
+PAPER4_HOLD_HOURS   = 24
 
+paper4_lock = threading.Lock()
 
-# ── ROUTES ─────────────────────────────────────────────────────────────────────
-@app.route("/")
-def index():
-    return render_template("index.html")
+def load_paper4():
+    if os.path.exists(PAPER4_FILE):
+        try:
+            with open(PAPER4_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"capital": PAPER4_INITIAL_CAP, "open": [], "closed": [], "equity_log": [], "cooldowns": {}}
+
+def save_paper4(data):
+    with open(PAPER4_FILE, "w") as f:
+        json.dump(data, f)
+
+def run_paper4_trading(market_data):
+    """Combo Score≥80 + Signal, exit after 24h if positive (wait if negative, SL -7%, TP +10%).
+    48h cooldown after stop loss exit."""
+    with paper4_lock:
+        pt = load_paper4()
+        if "cooldowns" not in pt:
+            pt["cooldowns"] = {}
+        now_dt  = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M")
+        changed = False
+
+        ticker_map = {}
+        for group_rows in market_data.values():
+            for row in group_rows:
+                ticker_map[row["ticker"]] = row
+
+        # ── Clean expired cooldowns ───────────────────────────────────────────
+        expired = [t for t, until in pt["cooldowns"].items()
+                   if datetime.strptime(until, "%Y-%m-%d %H:%M") <= now_dt]
+        for t in expired:
+            del pt["cooldowns"][t]
+        if expired:
+            changed = True
+
+        # ── Check exits ───────────────────────────────────────────────────────
+        COOLDOWN_HOURS = 48.0
+
+        still_open = []
+        for pos in pt["open"]:
+            ticker = pos["ticker"]
+            row    = ticker_map.get(ticker)
+
+            entry_dt   = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
+            hours_held = (now_dt - entry_dt).total_seconds() / 3600
+            current_price = row["price"] if row else pos.get("current_price", pos["entry_price"])
+            ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+
+            exit_reason = None
+            needs_cooldown = False
+
+            if ret_pct >= PAPER4_TAKE_PROFIT:
+                exit_reason = f"Take profit +{ret_pct:.1f}%"
+            elif ret_pct <= PAPER4_STOP_LOSS:
+                exit_reason = f"Stop loss {ret_pct:.1f}%"
+                needs_cooldown = True
+            elif hours_held >= PAPER4_HOLD_HOURS:
+                if ret_pct >= 0:
+                    exit_reason = f"24h cumplidas ({hours_held:.1f}h)"
+                elif ret_pct <= PAPER4_STOP_LOSS:
+                    exit_reason = f"Stop loss {ret_pct:.1f}% ({hours_held:.1f}h)"
+                    needs_cooldown = True
+                # else: still negative past 24h, waiting for recovery
+
+            if exit_reason:
+                pnl = pos["shares"] * (current_price - pos["entry_price"])
+                pt["capital"] += pos["shares"] * current_price
+                pt["closed"].append({
+                    "ticker":        ticker,
+                    "name":          pos["name"],
+                    "entry_date":    pos["entry_date"],
+                    "exit_date":     now_str,
+                    "entry_price":   pos["entry_price"],
+                    "exit_price":    round(current_price, 2),
+                    "shares":        pos["shares"],
+                    "ret_pct":       round(ret_pct, 2),
+                    "pnl":           round(pnl, 2),
+                    "reason":        exit_reason,
+                    "entry_score":   pos.get("entry_score", "—"),
+                    "entry_signal":  pos.get("entry_signal", "—"),
+                    "hours_held":    round(hours_held, 1),
+                })
+                if needs_cooldown:
+                    cooldown_until = (now_dt + timedelta(hours=COOLDOWN_HOURS)).strftime("%Y-%m-%d %H:%M")
+                    pt["cooldowns"][ticker] = cooldown_until
+                changed = True
+            else:
+                if row:
+                    pos["current_price"] = round(current_price, 2)
+                    pos["ret_pct"]       = round(ret_pct, 2)
+                    pos["hours_held"]    = round(hours_held, 1)
+                    pos["hours_left"]    = round(max(0, PAPER4_HOLD_HOURS - hours_held), 1)
+                    pos["score"]         = row.get("inv_score")
+                    pos["waiting_recovery"] = hours_held >= PAPER4_HOLD_HOURS and ret_pct < 0
+                still_open.append(pos)
+
+        pt["open"] = still_open
+
+        # ── Check entries ─────────────────────────────────────────────────────
+        open_tickers = {p["ticker"] for p in pt["open"]}
+        for ticker, row in ticker_map.items():
+            if ticker in pt["cooldowns"]:
+                continue
+            score  = row.get("inv_score")
+            signal = row.get("signal", "")
+            trend  = row.get("trend", "")
+            if score is None or score < PAPER4_MIN_SCORE:
+                continue
+            if signal not in ("buy", "strong_buy"):
+                continue
+            if trend != "bullish":
+                continue
+            if ticker in open_tickers:
+                continue
+            position_size = pt["capital"] * PAPER4_POSITION_PCT
+            if position_size < 1:
+                continue
+            shares = position_size / row["price"]
+            pt["capital"] -= position_size
+            pt["open"].append({
+                "ticker":           ticker,
+                "name":             row["name"],
+                "entry_date":       now_str,
+                "entry_price":      round(row["price"], 2),
+                "current_price":    round(row["price"], 2),
+                "shares":           round(shares, 6),
+                "ret_pct":          0.0,
+                "hours_held":       0.0,
+                "hours_left":       float(PAPER4_HOLD_HOURS),
+                "entry_score":      score,
+                "entry_signal":     signal,
+                "score":            score,
+                "waiting_recovery": False,
+            })
+            open_tickers.add(ticker)
+            changed = True
+
+        # ── Equity log ────────────────────────────────────────────────────────
+        open_value   = sum(p["shares"] * ticker_map.get(p["ticker"], {}).get("price", p["entry_price"]) for p in pt["open"])
+        total_equity = round(pt["capital"] + open_value, 2)
+        pt["equity_log"].append({"date": now_str, "equity": total_equity})
+        pt["equity_log"] = pt["equity_log"][-500:]
+
+        if changed or True:
+            save_paper4(pt)
+
+        return pt, ticker_map
 
 @app.route("/paper4")
 def paper4():
@@ -985,6 +1147,7 @@ def api_paper4_sell():
         })
         save_paper4(pt)
     return jsonify({"status": "sold"})
+
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
@@ -1254,4 +1417,3 @@ if __name__ == "__main__":
     t.start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
