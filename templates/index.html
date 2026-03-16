@@ -633,6 +633,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    margin-left: auto;
   }
 
   @media (max-width: 768px) {
@@ -653,7 +654,7 @@
     .header-left { flex: 1; min-width: 0; }
     .header-left h1 { font-size: 15px; white-space: nowrap; }
     .header-left p  { display: none; }
-    .header-right   { display: flex; align-items: center; gap: 4px; flex-shrink: 0; overflow: visible; }
+    .header-right   { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
     .header-right .refresh-btn { display: none; }
     .date-display   { display: none; }
     .last-updated   { display: none; }
@@ -953,6 +954,27 @@
   }
   .mob-bottom-nav .mob-icon { font-size: 16px; line-height: 1; }
 
+
+  /* ── Mobile nav buttons in header ── */
+  .mob-nav-btn {
+    display: none;
+    background: none;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    text-decoration: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  @media (max-width: 768px) {
+    .mob-nav-btn { display: flex !important; align-items: center; }
+    .header-right .refresh-btn { display: none; }
+    .date-display { display: none; }
+    .last-updated { display: none; }
+  }
 </style>
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -979,7 +1001,8 @@
     </div>
     <button class="refresh-btn" id="refresh-btn" onclick="triggerRefresh()">↺ Refresh</button>
     <button class="refresh-btn" onclick="openEmailModal()" style="margin-left:6px">✉ Alertas</button>
-    <button class="mob-hamburger" id="mob-ham" onclick="toggleMobMenu()">☰</button>
+    <a href="/paper2" class="mob-nav-btn">⚡ Score85</a>
+    <a href="/paper4" class="mob-nav-btn">🎯 Combo</a>
   </div>
 </div>
 
