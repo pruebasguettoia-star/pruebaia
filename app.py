@@ -151,6 +151,16 @@ lock  = threading.Lock()
 _fund_cache = {}
 _fund_lock  = threading.Lock()
 _FUND_TTL   = 3600
+_FUND_MAX   = 100  # máximo entradas — evita crecimiento indefinido
+
+def _fund_cache_prune():
+    """Eliminar entradas más antiguas si el cache supera el límite."""
+    if len(_fund_cache) <= _FUND_MAX:
+        return
+    # Ordenar por timestamp y eliminar el 20% más antiguo
+    sorted_keys = sorted(_fund_cache, key=lambda k: _fund_cache[k]["ts"])
+    for k in sorted_keys[:len(sorted_keys) // 5]:
+        _fund_cache.pop(k, None)
 
 def get_fundamentals(ticker):
     now = time.time()
@@ -256,24 +266,31 @@ def fetch_ticker(name, ticker):
         t   = yf.Ticker(ticker)
         now = datetime.now()
         # 1y for indicators (RSI, SMA200, BB, etc.)
-        hist = t.history(period="1y", auto_adjust=True)
-        if hist.empty:
+        _hist_raw = t.history(period="1y", auto_adjust=True)
+        if _hist_raw.empty:
             return None
-        hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+        _hist_raw.index = _hist_raw.index.tz_localize(None) if _hist_raw.index.tzinfo else _hist_raw.index
+        # Keep only needed columns — drop Dividends/Stock Splits immediately
+        _keep = [c for c in ["Open","High","Low","Close","Volume"] if c in _hist_raw.columns]
+        hist = _hist_raw[_keep].copy()
+        del _hist_raw  # free raw download immediately
 
         close  = hist["Close"]
         price  = float(close.iloc[-1])
         last_bar = hist.index[-1]
 
         # Separate lightweight fetch for long-term returns (3y price only).
-        # Descartamos todas las columnas salvo Close para reducir RAM por thread.
+        # Solo columna Close para reducir RAM por thread.
         try:
-            hist_3y = t.history(period="3y", auto_adjust=True)
-            if not hist_3y.empty:
-                hist_3y.index = hist_3y.index.tz_localize(None) if hist_3y.index.tzinfo else hist_3y.index
-                hist_3y = hist_3y[["Close"]]  # solo Close — libera Open/High/Low/Volume
+            _3y_raw = t.history(period="3y", auto_adjust=True)
+            if not _3y_raw.empty:
+                _3y_raw.index = _3y_raw.index.tz_localize(None) if _3y_raw.index.tzinfo else _3y_raw.index
+                hist_3y = _3y_raw[["Close"]].copy()
+                del _3y_raw
+            else:
+                hist_3y = hist[["Close"]]
         except Exception:
-            hist_3y = hist[["Close"]]  # fallback to 1y
+            hist_3y = hist[["Close"]]
 
         def closest(delta_days, h=None):
             # Anchor from `now`. Try primary source, fallback to hist if empty.
@@ -299,6 +316,20 @@ def fetch_ticker(name, ticker):
         ytd_price  = float(ytd_start["Close"].iloc[-1]) if not ytd_start.empty else None
         year_ago   = closest(365, hist_3y)
         three_yr   = closest(1095, hist_3y)
+
+        # ── Prob alcista 30d (from hist_3y rolling windows) ────────────────────
+        # IMPORTANTE: calcular ANTES de `del hist_3y`
+        prob_up_30d = None
+        try:
+            cl3 = hist_3y["Close"]
+            if len(cl3) >= 60:
+                wins  = sum(1 for i in range(len(cl3) - 30)
+                            if float(cl3.iloc[i+30]) > float(cl3.iloc[i]))
+                total = len(cl3) - 30
+                prob_up_30d = round(wins / total * 100, 1) if total > 0 else None
+        except Exception:
+            pass
+
         del hist_3y  # liberar ~3y de OHLCV — ya no se necesita
 
         # Use full available window (up to 252 bars) — avoids NaN with 1y data
@@ -517,19 +548,6 @@ def fetch_ticker(name, ticker):
             "total":  inv_score,
         }
 
-        # ── Prob alcista 30d (from hist_3y rolling windows) ────────────────────
-        prob_up_30d = None
-        try:
-            src_h = hist_3y if not hist_3y.empty else hist
-            cl3   = src_h["Close"]
-            if len(cl3) >= 60:
-                wins  = sum(1 for i in range(len(cl3) - 30)
-                            if float(cl3.iloc[i+30]) > float(cl3.iloc[i]))
-                total = len(cl3) - 30
-                prob_up_30d = round(wins / total * 100, 1) if total > 0 else None
-        except Exception:
-            pass
-
         # ── Sparkline (30 days of closes, normalised 0-100) ──────────────────
         spark_raw = close.iloc[-30:].tolist() if len(close) >= 30 else close.tolist()
         s_min, s_max = min(spark_raw), max(spark_raw)
@@ -627,11 +645,11 @@ def refresh_data():
                  for group, tickers in GROUPS.items()
                  for name, ticker in tickers]
 
-    # Fetch all tickers concurrently — 8 workers: cap peak RAM en Railway (512MB)
-    # Con 32 workers se acumulan ~32 DataFrames de 1y en memoria a la vez (~200MB peak).
-    # Con 8 workers el peak baja a ~50MB; el ciclo tarda ~15s más pero cabe en free tier.
+    # Fetch all tickers concurrently — 5 workers: cap peak RAM en Railway (512MB)
+    # Con 8 workers se acumulan ~8 DataFrames de 1y+3y en memoria a la vez (~80MB peak).
+    # Con 5 workers el peak baja a ~50MB; el ciclo tarda ~10s más pero cabe en free tier.
     row_map = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {ex.submit(fetch_ticker, name, ticker): (group, ticker)
                    for group, name, ticker in all_tasks}
         for fut in as_completed(futures):
@@ -712,24 +730,45 @@ PAPER2_HOLD_HOURS   = 24     # sell exactly 24h after entry
 
 paper2_lock = threading.Lock()
 
+# ── Estado en memoria — se carga del JSON al arrancar y se mantiene en RAM ──
+# Esto evita perder el historial de trades entre ciclos de refresh aunque el
+# JSON se corrompa o se reinicie el proceso de forma limpia.
+_paper2_mem: dict | None = None
+
 def load_paper2():
+    global _paper2_mem
+    # Si ya está en memoria, devolver directamente (no releer disco cada vez)
+    if _paper2_mem is not None:
+        return _paper2_mem
+    # Primera carga: leer del disco
     if os.path.exists(PAPER2_FILE):
         try:
             with open(PAPER2_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
+                _paper2_mem = json.load(f)
+            print(f"[paper2] cargado desde disco: {len(_paper2_mem.get('closed',[]))} trades cerrados")
+            return _paper2_mem
+        except Exception as e:
+            print(f"[paper2] error leyendo JSON: {e}")
+    _paper2_mem = {
         "capital":    PAPER2_INITIAL_CAP,
         "open":       [],
         "closed":     [],
         "equity_log": [],
         "cooldowns":  {},
     }
+    return _paper2_mem
 
 def save_paper2(data):
-    with open(PAPER2_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    global _paper2_mem
+    _paper2_mem = data  # mantener en memoria siempre actualizado
+    # Escritura atómica: escribir a temp y renombrar para evitar corrupción
+    tmp = PAPER2_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, PAPER2_FILE)
+    except Exception as e:
+        print(f"[paper2] error guardando JSON: {e}")
 
 def run_paper2_trading(market_data):
     """Score>85 strategy: buy on score, sell after 24h (or when positive if negative at 24h, stop loss -7%)."""
@@ -889,6 +928,8 @@ def api_paper2():
 
 @app.route("/api/paper2/reset", methods=["POST"])
 def api_paper2_reset():
+    global _paper2_mem
+    _paper2_mem = None  # limpiar memoria
     if os.path.exists(PAPER2_FILE):
         os.remove(PAPER2_FILE)
     return jsonify({"status": "reset"})
@@ -948,18 +989,34 @@ PAPER4_HOLD_HOURS   = 24
 
 paper4_lock = threading.Lock()
 
+# ── Estado en memoria para paper4 ────────────────────────────────────────────
+_paper4_mem: dict | None = None
+
 def load_paper4():
+    global _paper4_mem
+    if _paper4_mem is not None:
+        return _paper4_mem
     if os.path.exists(PAPER4_FILE):
         try:
             with open(PAPER4_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"capital": PAPER4_INITIAL_CAP, "open": [], "closed": [], "equity_log": [], "cooldowns": {}}
+                _paper4_mem = json.load(f)
+            print(f"[paper4] cargado desde disco: {len(_paper4_mem.get('closed',[]))} trades cerrados")
+            return _paper4_mem
+        except Exception as e:
+            print(f"[paper4] error leyendo JSON: {e}")
+    _paper4_mem = {"capital": PAPER4_INITIAL_CAP, "open": [], "closed": [], "equity_log": [], "cooldowns": {}}
+    return _paper4_mem
 
 def save_paper4(data):
-    with open(PAPER4_FILE, "w") as f:
-        json.dump(data, f)
+    global _paper4_mem
+    _paper4_mem = data  # mantener en memoria siempre actualizado
+    tmp = PAPER4_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, PAPER4_FILE)
+    except Exception as e:
+        print(f"[paper4] error guardando JSON: {e}")
 
 def run_paper4_trading(market_data):
     """Combo Score≥80 + Signal, exit after 24h if positive (wait if negative, SL -7%, TP +10%).
@@ -1130,6 +1187,8 @@ def api_paper4():
 
 @app.route("/api/paper4/reset", methods=["POST"])
 def api_paper4_reset():
+    global _paper4_mem
+    _paper4_mem = None  # limpiar memoria
     if os.path.exists(PAPER4_FILE):
         os.remove(PAPER4_FILE)
     return jsonify({"status": "reset"})
