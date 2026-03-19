@@ -638,6 +638,18 @@
   td.beta-col   { text-align: right; min-width: 44px; font-family: var(--font-mono); font-size: 11px; }
   td.prob30-col { text-align: right; min-width: 50px; font-family: var(--font-mono); font-size: 11px; }
 
+  /* ── Projection banner ── */
+  #proj-banner {
+    display: none;
+    position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    background: rgba(124,92,186,0.15); border: 1px solid rgba(167,139,250,0.25);
+    color: #7c6aaa; font-family: var(--font-mono); font-size: 9px;
+    padding: 3px 10px; border-radius: 4px; white-space: nowrap;
+    pointer-events: none; z-index: 5; letter-spacing: 0.3px;
+  }
+  #proj-banner.visible { display: block; }
+  #proj-btn.proj-active { background: rgba(124,92,186,0.2) !important; color: #c4b5fd !important; border-color: #7c5cba !important; }
+
   /* JS tooltip */
   #js-tooltip {
     position: fixed; background: #1a1d24; color: #c8cdd6;
@@ -1509,15 +1521,25 @@
 
   function closeChart() {
     document.getElementById("chart-modal").classList.remove("open");
-    document.body.style.overflow = "";  // restore page scroll
+    document.body.style.overflow = "";
     if (chartPriceChart) { chartPriceChart.remove(); chartPriceChart = null; }
     if (chartRsiChart)   { chartRsiChart.remove();   chartRsiChart   = null; }
+    _projSeries = [];
+    _projActive = false;
+    const btn = document.getElementById("proj-btn");
+    if (btn) btn.classList.remove("proj-active");
+    document.getElementById("proj-banner").classList.remove("visible");
   }
 
   function setChartPeriod(period, btn) {
     document.querySelectorAll(".chart-tab").forEach(t => t.classList.remove("active"));
     btn.classList.add("active");
     showChartView();
+    // Resetear proyección al cambiar periodo (los datos cambian)
+    _projSeries = [];
+    _projActive = false;
+    document.getElementById("proj-btn").classList.remove("proj-active");
+    document.getElementById("proj-banner").classList.remove("visible");
     if (chartAllData) renderChart(period);
   }
 
@@ -1884,6 +1906,129 @@
     chartPriceChart.timeScale().fitContent();
   }
 
+  // ── VOLATILITY PROJECTION CONE ───────────────────────────────────────────────
+  let _projActive = false;
+  let _projSeries = [];   // series added for projection (to remove on toggle off)
+
+  function toggleProjection() {
+    _projActive = !_projActive;
+    const btn = document.getElementById("proj-btn");
+    const banner = document.getElementById("proj-banner");
+    btn.classList.toggle("proj-active", _projActive);
+    banner.classList.toggle("visible", _projActive);
+
+    if (_projActive) {
+      drawProjection();
+    } else {
+      // Remove projection series
+      _projSeries.forEach(s => { try { chartPriceChart.removeSeries(s); } catch(e){} });
+      _projSeries = [];
+    }
+  }
+
+  function drawProjection() {
+    if (!chartAllData || !chartPriceChart) return;
+    // Remove any existing projection series first
+    _projSeries.forEach(s => { try { chartPriceChart.removeSeries(s); } catch(e){} });
+    _projSeries = [];
+
+    const candles = chartAllData.candles;
+    if (!candles || candles.length < 20) return;
+
+    // ── Calcular volatilidad diaria con los últimos 20 cierres ───────────────
+    const recent = candles.slice(-21);
+    const logRets = [];
+    for (let i = 1; i < recent.length; i++) {
+      logRets.push(Math.log(recent[i].close / recent[i-1].close));
+    }
+    const mean  = logRets.reduce((a,b) => a+b, 0) / logRets.length;
+    const sigma = Math.sqrt(logRets.reduce((a,b) => a + (b-mean)**2, 0) / logRets.length);
+
+    const lastCandle = candles[candles.length - 1];
+    const S0   = lastCandle.close;
+    const t0   = lastCandle.time;
+    const DAY  = 86400;
+    // Saltar fines de semana: avanzar en días hábiles aprox
+    const DAYS = 15;  // proyectar 15 días hacia adelante
+
+    // Generar timestamps futuros (solo días hábiles aprox — saltar sáb/dom)
+    const futTimes = [];
+    let t = t0;
+    while (futTimes.length < DAYS) {
+      t += DAY;
+      const dow = new Date(t * 1000).getDay();
+      if (dow !== 0 && dow !== 6) futTimes.push(t);
+    }
+
+    // Para cada día futuro d: precio esperado = S0 * exp(mean*d ± z*sigma*sqrt(d))
+    // 1σ → 68% prob | 2σ → 95% prob
+    const midData   = [];
+    const up1Data   = [];
+    const dn1Data   = [];
+    const up2Data   = [];
+    const dn2Data   = [];
+
+    // Anclar al último precio real
+    midData.push({ time: t0, value: S0 });
+    up1Data.push({ time: t0, value: S0 });
+    dn1Data.push({ time: t0, value: S0 });
+    up2Data.push({ time: t0, value: S0 });
+    dn2Data.push({ time: t0, value: S0 });
+
+    futTimes.forEach((ft, i) => {
+      const d   = i + 1;
+      const mid = S0 * Math.exp(mean * d);
+      const std = sigma * Math.sqrt(d);
+      midData.push({ time: ft, value: parseFloat(mid.toFixed(4)) });
+      up1Data.push({ time: ft, value: parseFloat((S0 * Math.exp(mean*d + 1*std)).toFixed(4)) });
+      dn1Data.push({ time: ft, value: parseFloat((S0 * Math.exp(mean*d - 1*std)).toFixed(4)) });
+      up2Data.push({ time: ft, value: parseFloat((S0 * Math.exp(mean*d + 2*std)).toFixed(4)) });
+      dn2Data.push({ time: ft, value: parseFloat((S0 * Math.exp(mean*d - 2*std)).toFixed(4)) });
+    });
+
+    // ── Dibujar series ───────────────────────────────────────────────────────
+    // Banda exterior ±2σ (95%) — muy sutil
+    const s2u = chartPriceChart.addLineSeries({
+      color: "rgba(167,139,250,0.20)", lineWidth: 1, lineStyle: 3,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    s2u.setData(up2Data);
+    _projSeries.push(s2u);
+
+    const s2d = chartPriceChart.addLineSeries({
+      color: "rgba(167,139,250,0.20)", lineWidth: 1, lineStyle: 3,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    s2d.setData(dn2Data);
+    _projSeries.push(s2d);
+
+    // Banda interior ±1σ (68%) — más visible
+    const s1u = chartPriceChart.addLineSeries({
+      color: "rgba(167,139,250,0.55)", lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    s1u.setData(up1Data);
+    _projSeries.push(s1u);
+
+    const s1d = chartPriceChart.addLineSeries({
+      color: "rgba(167,139,250,0.55)", lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    s1d.setData(dn1Data);
+    _projSeries.push(s1d);
+
+    // Línea central (tendencia esperada) — sólida y sutil
+    const sm = chartPriceChart.addLineSeries({
+      color: "rgba(196,181,253,0.75)", lineWidth: 1.5, lineStyle: 0,
+      priceLineVisible: false, lastValueVisible: true, title: "Proj.",
+    });
+    sm.setData(midData);
+    _projSeries.push(sm);
+
+    // Ajustar vista para mostrar los días futuros
+    chartPriceChart.timeScale().fitContent();
+  }
+
   // Close on backdrop click
   window.addEventListener("DOMContentLoaded", function() {
     document.getElementById("chart-modal").addEventListener("click", function(e) {
@@ -2113,6 +2258,7 @@
         <div class="legend-item"><div class="legend-line" style="background:#c084fc"></div>RSI</div>
         <div class="legend-item"><div class="legend-line" style="background:#34b566;height:8px;width:8px;border-radius:50%"></div>★ Compra Fuerte</div>
       </div>
+      <button id="proj-btn" class="chart-tab" onclick="toggleProjection()" style="margin-left:8px;border-color:#7c5cba;color:#a78bfa">〜 Proyección</button>
     </div>
     <div id="chart-crosshair-info">
       <div class="ci-item">O: <span id="ci-open">—</span></div>
@@ -2126,6 +2272,7 @@
     <div id="chart-price-container">
       <div id="chart-loading">Cargando datos...</div>
       <div id="chart-price"></div>
+      <div id="proj-banner">〜 Proyección estadística · basada en volatilidad histórica · no es consejo de inversión</div>
     </div>
     <div id="chart-rsi-container">
       <div id="chart-rsi"></div>
