@@ -547,63 +547,93 @@
   /* ── CHART MODAL ── */
   #chart-modal {
     display: none; position: fixed; inset: 0; z-index: 2000;
-    background: rgba(0,0,0,0.82); backdrop-filter: blur(4px);
+    background: rgba(0,0,0,0.88); backdrop-filter: blur(6px);
     align-items: center; justify-content: center;
   }
   #chart-modal.open { display: flex; }
   #chart-box {
-    background: #0d0f12; border: 1px solid #252a33;
-    border-radius: 12px; width: min(1100px, 97vw);
-    height: min(780px, 94vh); display: flex; flex-direction: column;
-    box-shadow: 0 12px 60px rgba(0,0,0,0.9); overflow: hidden;
+    background: #0a0c0f; border: 1px solid #1e2530;
+    border-radius: 14px; width: min(1160px, 97vw);
+    height: min(820px, 95vh); display: flex; flex-direction: column;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.95), 0 0 0 1px rgba(255,255,255,0.04); overflow: hidden;
   }
+
+  /* ── Header: ticker + precio + cambio todo en una línea ── */
   #chart-header {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    padding: 14px 18px 10px; border-bottom: 1px solid #1e2229; flex-shrink: 0; gap: 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px 10px; border-bottom: 1px solid #1a1f28; flex-shrink: 0; gap: 16px;
+    background: #0d1018;
   }
-  #chart-title { font-family: var(--font-mono); font-size: 15px; color: #e8ecf2; font-weight: 700; }
-  #chart-price-display { font-family: var(--font-mono); font-size: 22px; color: #e8ecf2; font-weight: 700; margin-top: 2px; }
-  #chart-change-display { font-family: var(--font-mono); font-size: 12px; margin-top: 2px; }
+  #chart-header-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+  #chart-title {
+    font-family: var(--font-mono); font-size: 13px; color: #7a8699;
+    font-weight: 500; letter-spacing: 0.3px; white-space: nowrap;
+  }
+  #chart-price-display {
+    font-family: var(--font-mono); font-size: 26px; color: #edf0f5;
+    font-weight: 700; letter-spacing: -0.5px; line-height: 1;
+  }
+  #chart-change-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 6px; font-family: var(--font-mono);
+    font-size: 11px; font-weight: 600; border: 1px solid transparent; line-height: 1;
+  }
+  #chart-change-pill.up   { background: rgba(52,181,102,0.12); color: #34b566; border-color: rgba(52,181,102,0.25); }
+  #chart-change-pill.down { background: rgba(196,48,48,0.12);  color: #e05252; border-color: rgba(196,48,48,0.25); }
+  #chart-change-display { display:none; }  /* legacy hidden */
   #chart-close {
-    background: none; border: none; color: var(--muted); font-size: 20px;
-    cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: 4px; flex-shrink: 0;
+    background: none; border: 1px solid #1e2530; color: #5a6478; font-size: 16px;
+    cursor: pointer; line-height: 1; padding: 5px 9px; border-radius: 6px; flex-shrink: 0;
+    transition: all 0.15s;
   }
-  #chart-close:hover { color: #e8ecf2; background: #1e2229; }
+  #chart-close:hover { color: #edf0f5; background: #1e2530; border-color: #2e3a4a; }
+
+  /* ── Stats bar ── */
   #chart-stats {
-    display: flex; gap: 0; flex-shrink: 0; border-bottom: 1px solid #1e2229; overflow-x: auto;
+    display: flex; gap: 0; flex-shrink: 0; border-bottom: 1px solid #1a1f28; overflow-x: auto;
+    background: #0b0e14;
   }
-  .chart-stat { padding: 8px 16px; border-right: 1px solid #1e2229; flex-shrink: 0; }
+  .chart-stat { padding: 7px 18px; border-right: 1px solid #1a1f28; flex-shrink: 0; }
   .chart-stat:last-child { border-right: none; }
-  .chart-stat-label { font-size: 9px; color: var(--muted); font-family: var(--font-mono); letter-spacing: 0.8px; text-transform: uppercase; }
-  .chart-stat-value { font-size: 12px; font-family: var(--font-mono); color: #e8ecf2; font-weight: 600; margin-top: 2px; }
+  .chart-stat-label { font-size: 8.5px; color: #4a5568; font-family: var(--font-mono); letter-spacing: 0.9px; text-transform: uppercase; }
+  .chart-stat-value { font-size: 12px; font-family: var(--font-mono); color: #c8d0de; font-weight: 600; margin-top: 3px; }
+
+  /* ── Controls bar ── */
   #chart-controls {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 18px; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+    padding: 7px 20px; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+    background: #0a0c0f; border-bottom: 1px solid #141820;
   }
-  #chart-tabs { display: flex; gap: 4px; }
+  #chart-tabs { display: flex; gap: 3px; }
   .chart-tab {
-    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px;
-    padding: 4px 10px; border-radius: 4px; border: 1px solid #252a33;
-    background: none; color: var(--muted); cursor: pointer; transition: all 0.15s;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.4px;
+    padding: 4px 11px; border-radius: 5px; border: 1px solid #1e2530;
+    background: none; color: #4a5568; cursor: pointer; transition: all 0.15s;
   }
-  .chart-tab.active, .chart-tab:hover { background: #1e2229; color: #e8ecf2; border-color: #3a4150; }
-  #chart-legend { display: flex; gap: 12px; flex-wrap: wrap; }
-  .legend-item { font-size: 9.5px; font-family: var(--font-mono); color: var(--muted);
+  .chart-tab:hover { background: #141a24; color: #8a9ab0; border-color: #2a3345; }
+  .chart-tab.active { background: #1a2535; color: #e0e8f5; border-color: #2e4060; }
+  #chart-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend-item { font-size: 9px; font-family: var(--font-mono); color: #4a5568;
     display: flex; align-items: center; gap: 5px; }
   .legend-line { width: 16px; height: 2px; border-radius: 1px; }
+
+  /* ── Crosshair info ── */
   #chart-crosshair-info {
-    display: flex; gap: 16px; padding: 4px 18px; flex-shrink: 0;
-    font-family: var(--font-mono); font-size: 10px; min-height: 20px; flex-wrap: wrap;
+    display: flex; gap: 18px; padding: 4px 20px; flex-shrink: 0;
+    font-family: var(--font-mono); font-size: 10px; min-height: 22px; flex-wrap: wrap;
+    background: #0a0c0f; border-bottom: 1px solid #101418;
   }
-  .ci-item { color: var(--muted); }
-  .ci-item span { color: #c8cdd6; }
+  .ci-item { color: #3a4558; }
+  .ci-item span { color: #8a9ab0; }
+
+  /* ── Chart areas ── */
   #chart-price-container { flex: 1; min-height: 0; position: relative; }
   #chart-price { width: 100%; height: 100%; }
-  #chart-rsi-container { height: 110px; flex-shrink: 0; position: relative; border-top: 1px solid #1e2229; }
+  #chart-rsi-container { height: 100px; flex-shrink: 0; position: relative; border-top: 1px solid #141820; }
   #chart-rsi { width: 100%; height: 100%; }
   #chart-loading {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    font-family: var(--font-mono); font-size: 11px; color: var(--muted); background: #0d0f12; z-index: 10;
+    font-family: var(--font-mono); font-size: 11px; color: #3a4558; background: #0a0c0f; z-index: 10;
   }
   td.beta-col   { text-align: right; min-width: 44px; font-family: var(--font-mono); font-size: 11px; }
   td.prob30-col { text-align: right; min-width: 50px; font-family: var(--font-mono); font-size: 11px; }
@@ -723,9 +753,10 @@
 
     /* Header: título + precio en una línea */
     #chart-header  { padding: 8px 12px 6px; gap: 8px; }
-    #chart-title   { font-size: 12px; }
-    #chart-price-display  { font-size: 16px; margin-top: 1px; }
-    #chart-change-display { font-size: 10px; margin-top: 1px; }
+    #chart-header-left { gap: 8px; flex-wrap: wrap; }
+    #chart-title   { font-size: 11px; }
+    #chart-price-display  { font-size: 18px; }
+    #chart-change-pill { font-size: 10px; padding: 2px 7px; }
 
     /* Stats: grid 4 columnas, 2 filas — sin scroll horizontal */
     #chart-stats {
@@ -765,7 +796,7 @@
     }
 
     /* RSI más alto para ser legible */
-    #chart-rsi-container { height: 110px; }
+    #chart-rsi-container { height: 100px; }
 
     /* ── Status bar ── */
     .status-bar { padding: 6px 16px; gap: 12px; flex-wrap: wrap; }
@@ -1703,9 +1734,13 @@
     const prev = candles.length > 1 ? candles[candles.length-2].close : last.open;
     const chg  = last.close - prev, chgPct = chg / prev * 100;
     document.getElementById("chart-price-display").textContent = fmtP(last.close);
+    const pill = document.getElementById("chart-change-pill");
+    const chgSign = chg >= 0 ? "+" : "";
+    pill.textContent = chgSign + fmtP(Math.abs(chg)) + "  (" + chgSign + chgPct.toFixed(2) + "%)";
+    pill.className = "chart-change-pill " + (chg >= 0 ? "up" : "down");
+    // legacy el (hidden)
     const chgEl = document.getElementById("chart-change-display");
-    chgEl.textContent = (chg>=0?"+":"") + fmtP(Math.abs(chg)) + "  (" + (chgPct>=0?"+":"") + chgPct.toFixed(2) + "%)";
-    chgEl.style.color = chg >= 0 ? "#4ade80" : "#fca5a5";
+    chgEl.textContent = "";
 
     // Stats bar
     updateStats(candles, rsiData, bbUp, bbLo, signals);
@@ -1716,24 +1751,53 @@
     // ── Price chart ──────────────────────────────────────────────────────────
     chartPriceChart = LightweightCharts.createChart(priceEl, {
       ...CHART_OPTS, height: priceEl.parentElement.offsetHeight,
+      layout:    { background: { color: "#0a0c0f" }, textColor: "#4a5a72" },
+      grid:      { vertLines: { color: "#0f1318" }, horzLines: { color: "#0f1318" } },
+      crosshair: { mode: 1,
+                   vertLine: { color: "#2a3548", labelBackgroundColor: "#1a2535" },
+                   horzLine: { color: "#2a3548", labelBackgroundColor: "#1a2535" } },
+      timeScale: { borderColor: "#141820", timeVisible: true, fixLeftEdge: true },
+      rightPriceScale: { borderColor: "#141820" },
     });
 
+    // Volume bars (rendered first so candles paint on top)
+    const volData = candles
+      .filter(c => c.volume != null && c.volume > 0)
+      .map(c => ({ time: c.time, value: c.volume, color: c.close >= c.open
+          ? "rgba(52,181,102,0.18)" : "rgba(196,48,48,0.18)" }));
+    if (volData.length) {
+      const volSeries = chartPriceChart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "vol",
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      chartPriceChart.priceScale("vol").applyOptions({
+        scaleMargins: { top: 0.78, bottom: 0 },
+        borderVisible: false,
+      });
+      volSeries.setData(volData);
+    }
+
     const candleSeries = chartPriceChart.addCandlestickSeries({
-      upColor: "#2a9150", downColor: "#9e2a2a",
-      borderUpColor: "#34b566", borderDownColor: "#e05252",
-      wickUpColor: "#34b566", wickDownColor: "#e05252",
+      upColor:        "#26a65b",
+      downColor:      "#c43030",
+      borderUpColor:  "#2ecc71",
+      borderDownColor:"#e74c3c",
+      wickUpColor:    "#2ecc71",
+      wickDownColor:  "#e74c3c",
     });
     candleSeries.setData(candles);
 
-    const bbUpS = chartPriceChart.addLineSeries({ color: "rgba(74,158,255,0.6)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false, lineStyle:2 });
-    const bbLoS = chartPriceChart.addLineSeries({ color: "rgba(74,158,255,0.6)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false, lineStyle:2 });
+    const bbUpS = chartPriceChart.addLineSeries({ color: "rgba(100,160,255,0.35)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false, lineStyle:2 });
+    const bbLoS = chartPriceChart.addLineSeries({ color: "rgba(100,160,255,0.35)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false, lineStyle:2 });
     bbUpS.setData(bbUp);
     bbLoS.setData(bbLo);
 
-    const sma50S = chartPriceChart.addLineSeries({ color: "#4a9eff", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true, title:"SMA50" });
+    const sma50S = chartPriceChart.addLineSeries({ color: "#5b9cf6", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true, title:"SMA50" });
     sma50S.setData(sma50);
 
-    const sma200S = chartPriceChart.addLineSeries({ color: "#f59e0b", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true, title:"SMA200" });
+    const sma200S = chartPriceChart.addLineSeries({ color: "#f5a623", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true, title:"SMA200" });
     sma200S.setData(sma200);
 
     if (signals.length) {
@@ -1782,19 +1846,26 @@
 
     // ── RSI chart ────────────────────────────────────────────────────────────
     chartRsiChart = LightweightCharts.createChart(rsiEl, {
-      ...CHART_OPTS, height: 110,
-      rightPriceScale: { borderColor:"#1e2229", scaleMargins:{top:0.1,bottom:0.1} },
+      ...CHART_OPTS, height: 100,
+      layout:    { background: { color: "#08090c" }, textColor: "#3a4a5e" },
+      grid:      { vertLines: { color: "#0a0d10" }, horzLines: { color: "#0a0d10" } },
+      crosshair: { mode: 1,
+                   vertLine: { color: "#2a3548", labelBackgroundColor: "#1a2535" },
+                   horzLine: { color: "#2a3548", labelBackgroundColor: "#1a2535" } },
+      timeScale: { borderColor: "#141820", timeVisible: true },
+      rightPriceScale: { borderColor:"#141820", scaleMargins:{top:0.1,bottom:0.1} },
     });
 
     const rsiSeries = chartRsiChart.addLineSeries({
-      color: "#c084fc", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true,
+      color: "#a855f7", lineWidth: 1.5, priceLineVisible:false, lastValueVisible:true,
       priceFormat: { type:"price", precision:1, minMove:0.1 },
     });
     rsiSeries.setData(rsiData);
 
-    chartRsiChart.addLineSeries({color:"rgba(224,82,82,0.5)",  lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:1})
+    // RSI overbought/oversold reference lines
+    chartRsiChart.addLineSeries({color:"rgba(196,48,48,0.4)",  lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:1})
       .setData(rsiData.map(p => ({time:p.time, value:70})));
-    chartRsiChart.addLineSeries({color:"rgba(52,181,102,0.5)", lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:1})
+    chartRsiChart.addLineSeries({color:"rgba(46,160,100,0.4)", lineWidth:1, priceLineVisible:false, lastValueVisible:false, lineStyle:1})
       .setData(rsiData.map(p => ({time:p.time, value:30})));
 
     // Sync timescales (no infinite loop)
@@ -2011,10 +2082,11 @@
 <div id="chart-modal">
   <div id="chart-box">
     <div id="chart-header">
-      <div>
+      <div id="chart-header-left">
         <div id="chart-title">—</div>
         <div id="chart-price-display">—</div>
-        <div id="chart-change-display">—</div>
+        <div id="chart-change-pill">—</div>
+        <div id="chart-change-display" style="display:none">—</div>
       </div>
       <button id="chart-close" onclick="closeChart()">&#x2715;</button>
     </div>
