@@ -1354,12 +1354,18 @@ def api_chart(ticker):
         candles = []
         for i in range(len(hist)):
             row = hist.iloc[i]
+            vol = None
+            if "Volume" in hist.columns:
+                v = row["Volume"]
+                if v == v and v > 0:  # not NaN and positive
+                    vol = int(v)
             candles.append({
-                "time":  int(hist.index[i].timestamp()),
-                "open":  round(float(row["Open"]),  4),
-                "high":  round(float(row["High"]),  4),
-                "low":   round(float(row["Low"]),   4),
-                "close": round(float(row["Close"]), 4),
+                "time":   int(hist.index[i].timestamp()),
+                "open":   round(float(row["Open"]),  4),
+                "high":   round(float(row["High"]),  4),
+                "low":    round(float(row["Low"]),   4),
+                "close":  round(float(row["Close"]), 4),
+                "volume": vol,
             })
 
         return jsonify({
@@ -1509,6 +1515,32 @@ def api_ping():
     return Response(_json.dumps({"ready": ready, "last_updated": ts}),
                     mimetype="application/json",
                     headers={"Cache-Control": "no-store"})
+
+@app.route("/api/backup")
+def api_backup():
+    """Descarga temporal de los JSON de paper trading en un zip.
+    BORRAR ESTE ENDPOINT tras hacer el backup."""
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, mem in [("paper2_trades.json", _paper2_mem),
+                           ("paper4_trades.json", _paper4_mem)]:
+            # Usar estado en memoria si existe, si no leer del disco
+            if mem is not None:
+                data = json.dumps(mem, indent=2)
+            elif os.path.exists(os.path.join(os.path.dirname(__file__), fname)):
+                with open(os.path.join(os.path.dirname(__file__), fname)) as f:
+                    data = f.read()
+            else:
+                data = "{}"
+            zf.writestr(fname, data)
+    buf.seek(0)
+    from flask import Response as _R
+    return _R(
+        buf.read(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": "attachment; filename=paper_backup.zip"}
+    )
 
 @app.route("/api/wake", methods=["GET"])
 def api_wake():
