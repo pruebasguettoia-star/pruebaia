@@ -1476,6 +1476,12 @@
     retEl.style.color = ret >= 0 ? "#4ade80" : "#fca5a5";
     document.getElementById("cs-vol").textContent = sigma.toFixed(2) + "%";
 
+    // Vol. anualizada = sigma_diaria * sqrt(252)
+    const volAnn = sigma * Math.sqrt(252);
+    const volAnnEl = document.getElementById("cs-vol-ann");
+    volAnnEl.textContent = volAnn.toFixed(1) + "%";
+    volAnnEl.style.color = volAnn >= 40 ? "#fca5a5" : volAnn >= 20 ? "#fcd34d" : "#c8d0de";
+
     const lastRsi = rsiData.length ? rsiData[rsiData.length-1].value : null;
     if (lastRsi != null) {
       const rsiEl = document.getElementById("cs-rsi");
@@ -2240,6 +2246,7 @@
       <div class="chart-stat"><div class="chart-stat-label">Mínimo periodo</div><div class="chart-stat-value" id="cs-low">—</div></div>
       <div class="chart-stat"><div class="chart-stat-label">Retorno periodo</div><div class="chart-stat-value" id="cs-ret">—</div></div>
       <div class="chart-stat"><div class="chart-stat-label">Volatilidad diaria</div><div class="chart-stat-value" id="cs-vol">—</div></div>
+      <div class="chart-stat"><div class="chart-stat-label">Vol. anualizada</div><div class="chart-stat-value" id="cs-vol-ann">—</div></div>
       <div class="chart-stat"><div class="chart-stat-label">RSI actual</div><div class="chart-stat-value" id="cs-rsi">—</div></div>
       <div class="chart-stat"><div class="chart-stat-label">BB% actual</div><div class="chart-stat-value" id="cs-bb">—</div></div>
       <div class="chart-stat"><div class="chart-stat-label">Señales ★</div><div class="chart-stat-value" id="cs-signals">—</div></div>
