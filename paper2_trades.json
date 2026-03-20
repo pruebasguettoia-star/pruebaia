@@ -1,12 +1,7 @@
 {
-  "capital": 10147.0,
+  "capital": 10000.0,
   "open": [],
   "closed": [],
-  "equity_log": [
-    {
-      "date": "2026-03-16 17:30",
-      "equity": 10147.0
-    }
-  ],
+  "equity_log": [],
   "cooldowns": {}
 }
