@@ -97,7 +97,7 @@ GROUPS = {
         ("France (CAC 40)",   "^FCHI"),
         ("Germany (DAX)",     "^GDAXI"),
         ("Netherlands (AEX)", "^AEX"),
-        ("Spain (IBEX 35)",   "^SMSI"),
+        ("Spain (IBEX 35)",   "^IBEX"),
         ("Italy (FTSE MIB)",  "EWI"),
         ("Switzerland (SMI)", "^SSMI"),
     ],
@@ -723,7 +723,7 @@ def index():
 # ── PAPER TRADING 2 — Score > 85, salida automática a las 24h ────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.json")
-PAPER2_INITIAL_CAP  = 10147.0
+PAPER2_INITIAL_CAP  = 10000.0
 PAPER2_POSITION_PCT = 0.20   # 20% of capital per trade
 PAPER2_MIN_SCORE    = 85     # minimum inv_score to open a position
 PAPER2_HOLD_HOURS   = 24     # sell exactly 24h after entry
@@ -771,7 +771,20 @@ def save_paper2(data):
         print(f"[paper2] error guardando JSON: {e}")
 
 def run_paper2_trading(market_data):
-    """Score>85 strategy: buy on score, sell after 24h (or when positive if negative at 24h, stop loss -7%)."""
+    """Score≥85 strategy con trailing stop y extensión de posición:
+
+    FASE 1 (0-24h): hold normal.
+      - Stop loss -7% en cualquier momento → vender + cooldown 48h
+
+    FASE 2 (≥24h): depende del estado:
+      A) Positivo + score ≥85 → activar trailing stop 2%
+         - Vender si precio cae 2% desde su máximo histórico en posición
+         - Vender si score baja de 85
+      B) Positivo + score <85  → vender inmediatamente
+      C) Negativo              → aguantar 24h más (hasta 48h total)
+         - Si en algún momento llega a positivo → trailing stop 2%
+         - Si a las 48h sigue negativo → vender + cooldown 48h
+    """
     with paper2_lock:
         pt = load_paper2()
         now_dt  = datetime.now()
@@ -791,63 +804,104 @@ def run_paper2_trading(market_data):
         for t in expired:
             del pt["cooldowns"][t]
 
-        # ── Check exits ──────────────────────────────────────────────────────
-        # Rules:
-        #   < 24h  → hold normally
-        #   ≥ 24h + ret >= 0 → sell (24h elapsed and in profit or breakeven)
-        #   ≥ 24h + ret < 0  → wait for positive OR stop loss -7% (48h cooldown)
-        PAPER2_STOP_LOSS = -7.0
+        PAPER2_STOP_LOSS    = -7.0
+        PAPER2_TRAILING_PCT =  2.0   # % de caída desde máximo para trailing stop
+        PAPER2_MAX_HOURS    = 48.0   # máximo absoluto de horas en posición
 
         still_open = []
         for pos in pt["open"]:
             ticker = pos["ticker"]
             row    = ticker_map.get(ticker)
 
-            entry_dt   = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
-            hours_held = (now_dt - entry_dt).total_seconds() / 3600
+            entry_dt      = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
+            hours_held    = (now_dt - entry_dt).total_seconds() / 3600
             current_price = row["price"] if row else pos.get("current_price", pos["entry_price"])
-            ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+            ret_pct       = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+            current_score = row.get("inv_score") if row else None
 
-            exit_reason = None
+            # ── Actualizar máximo histórico de la posición (para trailing stop) ─
+            peak_price = pos.get("peak_price", pos["entry_price"])
+            if current_price > peak_price:
+                peak_price = current_price
+                pos["peak_price"] = round(peak_price, 4)
+                changed = True
+
+            trailing_drop = (current_price - peak_price) / peak_price * 100  # negativo
+
+            exit_reason    = None
             needs_cooldown = False
 
-            if hours_held >= PAPER2_HOLD_HOURS:
-                if ret_pct >= 0:
-                    exit_reason = f"24h cumplidas ({hours_held:.1f}h)"
-                elif ret_pct <= PAPER2_STOP_LOSS:
-                    exit_reason = f"Stop loss {ret_pct:.1f}% ({hours_held:.1f}h)"
-                    needs_cooldown = True
-                else:
-                    pass  # still negative, waiting for recovery
+            # ── Stop loss duro -7% (cualquier fase) ──────────────────────────
+            if ret_pct <= PAPER2_STOP_LOSS:
+                exit_reason    = f"Stop loss {ret_pct:.1f}%"
+                needs_cooldown = True
 
+            # ── Trailing stop activo (fase 2 positivo) ────────────────────────
+            elif pos.get("trailing_active") and trailing_drop <= -PAPER2_TRAILING_PCT:
+                exit_reason = f"Trailing stop {trailing_drop:.1f}% desde máximo"
+
+            # ── Score baja de 85 con trailing activo → vender ────────────────
+            elif pos.get("trailing_active") and current_score is not None and current_score < PAPER2_MIN_SCORE:
+                exit_reason = f"Score bajó a {current_score} (< {PAPER2_MIN_SCORE})"
+
+            # ── Fase 2: ≥24h ─────────────────────────────────────────────────
+            elif hours_held >= PAPER2_HOLD_HOURS:
+                if ret_pct >= 0:
+                    # Positivo: ¿score sigue ≥85?
+                    if current_score is not None and current_score >= PAPER2_MIN_SCORE:
+                        # Activar trailing stop si no estaba activo
+                        if not pos.get("trailing_active"):
+                            pos["trailing_active"] = True
+                            pos["peak_price"]      = round(current_price, 4)
+                            changed = True
+                        # No vendemos aún — el trailing stop se encargará
+                    else:
+                        # Score <85 o sin datos → vender inmediatamente
+                        exit_reason = f"24h cumplidas, score {current_score} < {PAPER2_MIN_SCORE}"
+                else:
+                    # Negativo
+                    if hours_held >= PAPER2_MAX_HOURS:
+                        # 48h alcanzadas con pérdidas → vender + cooldown
+                        exit_reason    = f"48h con retorno negativo {ret_pct:.1f}%"
+                        needs_cooldown = True
+                    # else: seguimos esperando recuperación hasta 48h
+
+            # ── Ejecutar salida ───────────────────────────────────────────────
             if exit_reason:
                 pnl = pos["shares"] * (current_price - pos["entry_price"])
                 pt["capital"] += pos["shares"] * current_price
                 pt["closed"].append({
-                    "ticker":       ticker,
-                    "name":         pos["name"],
-                    "entry_date":   pos["entry_date"],
-                    "exit_date":    now_str,
-                    "entry_price":  pos["entry_price"],
-                    "exit_price":   round(current_price, 2),
-                    "shares":       pos["shares"],
-                    "ret_pct":      round(ret_pct, 2),
-                    "pnl":          round(pnl, 2),
-                    "reason":       exit_reason,
-                    "entry_score":  pos.get("entry_score", "—"),
-                    "hours_held":   round(hours_held, 1),
+                    "ticker":          ticker,
+                    "name":            pos["name"],
+                    "entry_date":      pos["entry_date"],
+                    "exit_date":       now_str,
+                    "entry_price":     pos["entry_price"],
+                    "exit_price":      round(current_price, 2),
+                    "peak_price":      round(peak_price, 2),
+                    "shares":          pos["shares"],
+                    "ret_pct":         round(ret_pct, 2),
+                    "pnl":             round(pnl, 2),
+                    "reason":          exit_reason,
+                    "entry_score":     pos.get("entry_score", "—"),
+                    "hours_held":      round(hours_held, 1),
+                    "trailing_active": pos.get("trailing_active", False),
                 })
                 if needs_cooldown:
                     pt["cooldowns"][ticker] = (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M")
                 changed = True
             else:
+                # Actualizar estado visible de la posición
                 if row:
-                    pos["current_price"] = round(current_price, 2)
-                    pos["ret_pct"]       = round(ret_pct, 2)
-                    pos["hours_held"]    = round(hours_held, 1)
-                    pos["hours_left"]    = round(max(0, PAPER2_HOLD_HOURS - hours_held), 1)
-                    pos["score"]         = row.get("inv_score")
-                    pos["waiting_recovery"] = hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0
+                    pos["current_price"]   = round(current_price, 2)
+                    pos["ret_pct"]         = round(ret_pct, 2)
+                    pos["hours_held"]      = round(hours_held, 1)
+                    pos["hours_left"]      = round(max(0, PAPER2_HOLD_HOURS - hours_held), 1)
+                    pos["score"]           = current_score
+                    pos["trailing_active"] = pos.get("trailing_active", False)
+                    pos["peak_price"]      = round(peak_price, 4)
+                    pos["trailing_drop"]   = round(trailing_drop, 2)
+                    pos["waiting_recovery"] = (hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0
+                                               and hours_held < PAPER2_MAX_HOURS)
                 still_open.append(pos)
 
         pt["open"] = still_open
@@ -868,17 +922,21 @@ def run_paper2_trading(market_data):
             shares = position_size / row["price"]
             pt["capital"] -= position_size
             pt["open"].append({
-                "ticker":        ticker,
-                "name":          row["name"],
-                "entry_date":    now_str,
-                "entry_price":   round(row["price"], 2),
-                "current_price": round(row["price"], 2),
-                "shares":        round(shares, 6),
-                "ret_pct":       0.0,
-                "hours_held":    0.0,
-                "hours_left":    float(PAPER2_HOLD_HOURS),
-                "entry_score":   score,
-                "score":         score,
+                "ticker":          ticker,
+                "name":            row["name"],
+                "entry_date":      now_str,
+                "entry_price":     round(row["price"], 2),
+                "current_price":   round(row["price"], 2),
+                "peak_price":      round(row["price"], 2),
+                "shares":          round(shares, 6),
+                "ret_pct":         0.0,
+                "trailing_drop":   0.0,
+                "trailing_active": False,
+                "hours_held":      0.0,
+                "hours_left":      float(PAPER2_HOLD_HOURS),
+                "entry_score":     score,
+                "score":           score,
+                "waiting_recovery": False,
             })
             open_tickers.add(ticker)
             changed = True
@@ -980,7 +1038,7 @@ def api_paper2_sell():
 # Exit:   24h elapsed + ret ≥ 0% | stop loss -7% | take profit +10%
 # Cooldown: 48h after stop loss or RSI exit before re-entering same ticker
 PAPER4_FILE         = os.path.join(os.path.dirname(__file__), "paper4_trades.json")
-PAPER4_INITIAL_CAP  = 10089.0
+PAPER4_INITIAL_CAP  = 10000.0
 PAPER4_POSITION_PCT = 0.20
 PAPER4_MIN_SCORE    = 80
 PAPER4_TAKE_PROFIT  = 10.0
@@ -1516,32 +1574,6 @@ def api_ping():
                     mimetype="application/json",
                     headers={"Cache-Control": "no-store"})
 
-@app.route("/api/backup")
-def api_backup():
-    """Descarga temporal de los JSON de paper trading en un zip.
-    BORRAR ESTE ENDPOINT tras hacer el backup."""
-    import zipfile, io
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname, mem in [("paper2_trades.json", _paper2_mem),
-                           ("paper4_trades.json", _paper4_mem)]:
-            # Usar estado en memoria si existe, si no leer del disco
-            if mem is not None:
-                data = json.dumps(mem, indent=2)
-            elif os.path.exists(os.path.join(os.path.dirname(__file__), fname)):
-                with open(os.path.join(os.path.dirname(__file__), fname)) as f:
-                    data = f.read()
-            else:
-                data = "{}"
-            zf.writestr(fname, data)
-    buf.seek(0)
-    from flask import Response as _R
-    return _R(
-        buf.read(),
-        mimetype="application/zip",
-        headers={"Content-Disposition": "attachment; filename=paper_backup.zip"}
-    )
-
 @app.route("/api/wake", methods=["GET"])
 def api_wake():
     """Endpoint GET para UptimeRobot."""
@@ -1565,9 +1597,19 @@ def api_wake():
 # arranque si Flask usa use_reloader=True en desarrollo.
 _bg_started = False
 def _start_background():
-    global _bg_started
+    global _bg_started, _paper2_mem, _paper4_mem
     if not _bg_started:
         _bg_started = True
+        # ── Reset papers: borrar JSONs y memoria para arrancar desde 10.000 ──
+        # QUITAR estas líneas una vez hecho el reset inicial
+        for _f in [PAPER2_FILE, PAPER4_FILE]:
+            try:
+                if os.path.exists(_f): os.remove(_f)
+            except Exception: pass
+        _paper2_mem = None
+        _paper4_mem = None
+        print("[boot] papers reseteados — arrancan desde 10.000")
+        # ─────────────────────────────────────────────────────────────────────
         t = threading.Thread(target=background_refresh, daemon=True)
         t.start()
         print("[boot] background_refresh thread arrancado")
