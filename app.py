@@ -690,6 +690,16 @@ def refresh_data():
     n  = sum(len(v) for v in GROUPS.values())
     print(f"[{t0.strftime('%H:%M:%S')}] Fetching {n} tickers in parallel…")
 
+    # ── Obtener EUR/USD antes del ciclo principal ─────────────────────────────
+    try:
+        _fx = yf.Ticker("EURUSD=X").fast_info
+        _rate = getattr(_fx, "last_price", None)
+        if _rate and _rate > 0:
+            set_eurusd(round(1 / _rate, 6))
+            print(f"[fx] EUR/USD: 1 EUR = {_rate:.4f} USD → factor {1/_rate:.4f}")
+    except Exception as e:
+        print(f"[fx] error pre-fetch EUR/USD: {e}")
+
     # Flat list preserving group membership
     all_tasks = [(group, name, ticker)
                  for group, tickers in GROUPS.items()
@@ -727,17 +737,6 @@ def refresh_data():
     with lock:
         cache["data"]         = result
         cache["last_updated"] = datetime.now().strftime("%d-%b-%y %H:%M")
-
-    # ── Actualizar tipo de cambio EUR/USD desde los datos frescos ─────────────
-    try:
-        eurusd_row = row_map.get("EURUSD=X")
-        if eurusd_row:
-            rate = eurusd_row[1].get("price")  # precio ya en local (no USD)
-            if rate and rate > 0:
-                set_eurusd(round(1 / rate, 6))  # EURUSD=X da USD por EUR → invertir
-                print(f"[fx] EUR/USD actualizado: {1/rate:.4f} (1 EUR = {rate:.4f} USD)")
-    except Exception as e:
-        print(f"[fx] error actualizando EUR/USD: {e}")
 
     elapsed = (datetime.now() - t0).total_seconds()
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Done in {elapsed:.1f}s.")
