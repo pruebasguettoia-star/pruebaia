@@ -147,6 +147,44 @@ GROUPS = {
 cache = {"data": None, "last_updated": None}
 lock  = threading.Lock()
 
+# ── Tickers que cotizan en USD y se convierten a EUR ─────────────────────────
+# Europeos (.DE, .L, ^FCHI, ^GDAXI, ^AEX, ^IBEX, ^SSMI, ^STOXX50E) ya en EUR/GBP/CHF
+# Asiáticos (^N225, ^NSEI, ^HSI) en moneda local — no se convierten
+USD_TICKERS = {
+    # Major indices (ETFs en USD)
+    "^GSPC","URTH","^IXIC","EEM","IWM","RSP","^VIX",
+    # MAG 7
+    "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
+    # Bonds (ETFs USD)
+    "TLT","SHY","AGG","HYG","TIP",
+    # Commodities (futuros y crypto en USD)
+    "BZ=F","CL=F","NG=F","GC=F","SI=F","HG=F","PL=F","ZW=F","BTC-USD","ETH-USD",
+    # Currencies (pares vs USD — no convertir, son ratios)
+    # LATAM ETFs en USD
+    "EWZ","EWW","ARGT","ECH","EPU",
+    # Asia ETFs en USD
+    "EWY","MCHI","EWT","VNM",
+    # US Sectors
+    "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
+    # EU Sectors ETFs que cotizan en USD en NYSE
+    "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC",
+    # Italy ETF en USD
+    "EWI",
+}
+
+# Cache del tipo de cambio EUR/USD — se actualiza en cada refresh
+_eurusd_rate: float = 1.0
+_eurusd_lock = threading.Lock()
+
+def get_eurusd():
+    with _eurusd_lock:
+        return _eurusd_rate
+
+def set_eurusd(rate: float):
+    global _eurusd_rate
+    with _eurusd_lock:
+        _eurusd_rate = rate
+
 # Fundamentals cache — refreshed every 60 min (P/E and div don't change per refresh cycle)
 _fund_cache = {}
 _fund_lock  = threading.Lock()
@@ -561,12 +599,17 @@ def fetch_ticker(name, ticker):
         bar_age_hours = (now - last_bar).total_seconds() / 3600
         market_open = bar_age_hours < 1.0
 
+        # ── Conversión USD → EUR ──────────────────────────────────────────────
+        fx = get_eurusd() if ticker in USD_TICKERS else 1.0
+        def conv(v):
+            return round(v * fx, 4) if v is not None else None
+
         return {
             "name":          name,
             "ticker":        ticker,
-            "price":         round(price, 2),
-            "low52":         round(lo52, 2),
-            "high52":        round(hi52, 2),
+            "price":         round(price * fx, 2),
+            "low52":         round(lo52 * fx, 2),
+            "high52":        round(hi52 * fx, 2),
             "pos52":         pos52,
             "rsi":               rsi,
             "rsi_divergence":    rsi_divergence,
@@ -581,8 +624,8 @@ def fetch_ticker(name, ticker):
             "sparkline":     sparkline,
             "range_up":      range_up,
             "range_dn":      range_dn,
-            "price_hi":      price_hi,
-            "price_lo":      price_lo,
+            "price_hi":      conv(price_hi),
+            "price_lo":      conv(price_lo),
             "ret_15m":       r15,
             "ret_1h":        r60,
             "ret_3h":        r180,
@@ -595,6 +638,7 @@ def fetch_ticker(name, ticker):
             "beta":          beta,
             "prob_up_30d":   prob_up_30d,
             "market_open":   market_open,
+            "currency":      "EUR" if fx != 1.0 else "local",
         }
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
@@ -683,6 +727,17 @@ def refresh_data():
     with lock:
         cache["data"]         = result
         cache["last_updated"] = datetime.now().strftime("%d-%b-%y %H:%M")
+
+    # ── Actualizar tipo de cambio EUR/USD desde los datos frescos ─────────────
+    try:
+        eurusd_row = row_map.get("EURUSD=X")
+        if eurusd_row:
+            rate = eurusd_row[1].get("price")  # precio ya en local (no USD)
+            if rate and rate > 0:
+                set_eurusd(round(1 / rate, 6))  # EURUSD=X da USD por EUR → invertir
+                print(f"[fx] EUR/USD actualizado: {1/rate:.4f} (1 EUR = {rate:.4f} USD)")
+    except Exception as e:
+        print(f"[fx] error actualizando EUR/USD: {e}")
 
     elapsed = (datetime.now() - t0).total_seconds()
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Done in {elapsed:.1f}s.")
