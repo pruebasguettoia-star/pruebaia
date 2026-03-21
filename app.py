@@ -556,6 +556,11 @@ def fetch_ticker(name, ticker):
         else:
             sparkline = [50.0] * len(spark_raw)
 
+        # ── Mercado abierto/cerrado ───────────────────────────────────────────
+        # Comparar last_bar con now: si la última barra tiene menos de 1h → abierto
+        bar_age_hours = (now - last_bar).total_seconds() / 3600
+        market_open = bar_age_hours < 1.0
+
         return {
             "name":          name,
             "ticker":        ticker,
@@ -589,6 +594,7 @@ def fetch_ticker(name, ticker):
             "ret_3y":        pct(price, three_yr),
             "beta":          beta,
             "prob_up_30d":   prob_up_30d,
+            "market_open":   market_open,
         }
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
@@ -719,8 +725,25 @@ def background_refresh():
 def index():
     return render_template("index.html")
 
+def is_market_hours():
+    """Devuelve True si algún mercado principal está abierto ahora mismo.
+    Evita abrir posiciones con precios obsoletos fuera de horario."""
+    now_utc = datetime.utcnow()
+    dow = now_utc.weekday()  # 0=lunes … 6=domingo
+    if dow >= 5:  # fin de semana
+        return False
+    hour = now_utc.hour
+    minute = now_utc.minute
+    t = hour * 60 + minute  # minutos desde medianoche UTC
+    # NYSE/NASDAQ: 13:30–20:00 UTC
+    us_open = (13 * 60 + 30 <= t <= 20 * 60)
+    # Euronext/Xetra: 08:00–16:30 UTC
+    eu_open = (8 * 60 <= t <= 16 * 60 + 30)
+    return us_open or eu_open
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ── PAPER TRADING 2 — Score > 85, salida automática a las 24h ────────────────
+# ── PAPER TRADING 2 — Score ≥ 85, trailing stop ──────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.json")
 PAPER2_INITIAL_CAP  = 10000.0
@@ -906,40 +929,43 @@ def run_paper2_trading(market_data):
 
         pt["open"] = still_open
 
-        # ── Check entries: score > 85 ─────────────────────────────────────────
+        # ── Check entries: score ≥ 85 + mercado abierto ──────────────────────
         open_tickers = {p["ticker"] for p in pt["open"]}
-        for ticker, row in ticker_map.items():
-            if ticker in pt["cooldowns"]:
-                continue
-            score = row.get("inv_score")
-            if score is None or score < PAPER2_MIN_SCORE:
-                continue
-            if ticker in open_tickers:
-                continue
-            position_size = pt["capital"] * PAPER2_POSITION_PCT
-            if position_size < 1:
-                continue
-            shares = position_size / row["price"]
-            pt["capital"] -= position_size
-            pt["open"].append({
-                "ticker":          ticker,
-                "name":            row["name"],
-                "entry_date":      now_str,
-                "entry_price":     round(row["price"], 2),
-                "current_price":   round(row["price"], 2),
-                "peak_price":      round(row["price"], 2),
-                "shares":          round(shares, 6),
-                "ret_pct":         0.0,
-                "trailing_drop":   0.0,
-                "trailing_active": False,
-                "hours_held":      0.0,
-                "hours_left":      float(PAPER2_HOLD_HOURS),
-                "entry_score":     score,
-                "score":           score,
-                "waiting_recovery": False,
-            })
-            open_tickers.add(ticker)
-            changed = True
+        if not is_market_hours():
+            print("[paper2] fuera de horario — no se abren posiciones nuevas")
+        else:
+            for ticker, row in ticker_map.items():
+                if ticker in pt["cooldowns"]:
+                    continue
+                score = row.get("inv_score")
+                if score is None or score < PAPER2_MIN_SCORE:
+                    continue
+                if ticker in open_tickers:
+                    continue
+                position_size = pt["capital"] * PAPER2_POSITION_PCT
+                if position_size < 1:
+                    continue
+                shares = position_size / row["price"]
+                pt["capital"] -= position_size
+                pt["open"].append({
+                    "ticker":          ticker,
+                    "name":            row["name"],
+                    "entry_date":      now_str,
+                    "entry_price":     round(row["price"], 2),
+                    "current_price":   round(row["price"], 2),
+                    "peak_price":      round(row["price"], 2),
+                    "shares":          round(shares, 6),
+                    "ret_pct":         0.0,
+                    "trailing_drop":   0.0,
+                    "trailing_active": False,
+                    "hours_held":      0.0,
+                    "hours_left":      float(PAPER2_HOLD_HOURS),
+                    "entry_score":     score,
+                    "score":           score,
+                    "waiting_recovery": False,
+                })
+                open_tickers.add(ticker)
+                changed = True
 
         # ── Log equity ────────────────────────────────────────────────────────
         open_value = sum(
@@ -1163,44 +1189,47 @@ def run_paper4_trading(market_data):
 
         pt["open"] = still_open
 
-        # ── Check entries ─────────────────────────────────────────────────────
+        # ── Check entries — solo si mercado abierto ───────────────────────────
         open_tickers = {p["ticker"] for p in pt["open"]}
-        for ticker, row in ticker_map.items():
-            if ticker in pt["cooldowns"]:
-                continue
-            score  = row.get("inv_score")
-            signal = row.get("signal", "")
-            trend  = row.get("trend", "")
-            if score is None or score < PAPER4_MIN_SCORE:
-                continue
-            if signal not in ("buy", "strong_buy"):
-                continue
-            if trend != "bullish":
-                continue
-            if ticker in open_tickers:
-                continue
-            position_size = pt["capital"] * PAPER4_POSITION_PCT
-            if position_size < 1:
-                continue
-            shares = position_size / row["price"]
-            pt["capital"] -= position_size
-            pt["open"].append({
-                "ticker":           ticker,
-                "name":             row["name"],
-                "entry_date":       now_str,
-                "entry_price":      round(row["price"], 2),
-                "current_price":    round(row["price"], 2),
-                "shares":           round(shares, 6),
-                "ret_pct":          0.0,
-                "hours_held":       0.0,
-                "hours_left":       float(PAPER4_HOLD_HOURS),
-                "entry_score":      score,
-                "entry_signal":     signal,
-                "score":            score,
-                "waiting_recovery": False,
-            })
-            open_tickers.add(ticker)
-            changed = True
+        if not is_market_hours():
+            print("[paper4] fuera de horario — no se abren posiciones nuevas")
+        else:
+            for ticker, row in ticker_map.items():
+                if ticker in pt["cooldowns"]:
+                    continue
+                score  = row.get("inv_score")
+                signal = row.get("signal", "")
+                trend  = row.get("trend", "")
+                if score is None or score < PAPER4_MIN_SCORE:
+                    continue
+                if signal not in ("buy", "strong_buy"):
+                    continue
+                if trend != "bullish":
+                    continue
+                if ticker in open_tickers:
+                    continue
+                position_size = pt["capital"] * PAPER4_POSITION_PCT
+                if position_size < 1:
+                    continue
+                shares = position_size / row["price"]
+                pt["capital"] -= position_size
+                pt["open"].append({
+                    "ticker":           ticker,
+                    "name":             row["name"],
+                    "entry_date":       now_str,
+                    "entry_price":      round(row["price"], 2),
+                    "current_price":    round(row["price"], 2),
+                    "shares":           round(shares, 6),
+                    "ret_pct":          0.0,
+                    "hours_held":       0.0,
+                    "hours_left":       float(PAPER4_HOLD_HOURS),
+                    "entry_score":      score,
+                    "entry_signal":     signal,
+                    "score":            score,
+                    "waiting_recovery": False,
+                })
+                open_tickers.add(ticker)
+                changed = True
 
         # ── Equity log ────────────────────────────────────────────────────────
         open_value   = sum(p["shares"] * ticker_map.get(p["ticker"], {}).get("price", p["entry_price"]) for p in pt["open"])
