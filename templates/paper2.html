@@ -71,6 +71,11 @@ tr:hover td{background:#161a21;}
 .btn-sell{background:none;border:1px solid var(--r4);color:var(--r5);font-family:var(--font-mono);font-size:9px;padding:3px 8px;border-radius:3px;cursor:pointer;transition:all 0.15s;}
 .btn-sell:hover{background:var(--r3);border-color:var(--r5);color:#ffaaaa;}
 .btn-sell:disabled{opacity:0.4;cursor:not-allowed;}
+/* Trailing stop badge */
+.trailing-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;font-size:9px;font-weight:700;font-family:var(--font-mono);white-space:nowrap;}
+.trailing-on{background:rgba(167,139,250,0.15);color:#a78bfa;border:1px solid rgba(167,139,250,0.35);}
+.trailing-off{background:rgba(85,94,110,0.1);color:#555e6e;border:1px solid rgba(85,94,110,0.2);}
+.trailing-drop{font-size:9px;font-family:var(--font-mono);}
 #loading{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:12px;}
 .spinner{width:30px;height:30px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -130,10 +135,10 @@ tr:hover td{background:#161a21;}
 <div class="main">
 
   <div class="strategy-badge">
-    ⚡ Estrategia Score85 · 24h &nbsp;—&nbsp;
+    ⚡ Estrategia Score85 · Trailing Stop &nbsp;—&nbsp;
     <span>Compra cuando Score ≥ 85</span> &nbsp;·&nbsp;
-    <span>Vende automáticamente a las 24h</span> &nbsp;·&nbsp;
-    <span>20% del capital por posición</span>
+    <span>24h → mantiene si Score ≥ 85 + trailing 2%</span> &nbsp;·&nbsp;
+    <span>Stop loss −7% · 10% capital por posición</span>
   </div>
 
   <div class="cards">
@@ -164,12 +169,14 @@ tr:hover td{background:#161a21;}
         <th>Activo</th>
         <th>Score entrada</th>
         <th>P. entrada</th>
+        <th>P. máximo</th>
         <th>P. actual</th>
         <th>Ret.</th>
-        <th>Tiempo restante</th>
+        <th>Trailing</th>
+        <th>Tiempo / Estado</th>
         <th></th>
       </tr></thead>
-      <tbody id="open-body"><tr><td colspan="7" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ 85.</td></tr></tbody>
+      <tbody id="open-body"><tr><td colspan="9" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ 85.</td></tr></tbody>
     </table>
   </div>
 
@@ -182,12 +189,13 @@ tr:hover td{background:#161a21;}
         <th>Entrada</th>
         <th>Salida</th>
         <th>P. entrada</th>
+        <th>P. máximo</th>
         <th>P. salida</th>
-        <th>Ret. 24h</th>
+        <th>Ret.</th>
         <th>P&amp;L</th>
         <th>Motivo</th>
       </tr></thead>
-      <tbody id="closed-body"><tr><td colspan="9" class="empty">Aún no hay operaciones cerradas. Las posiciones se cierran automáticamente a las 24h.</td></tr></tbody>
+      <tbody id="closed-body"><tr><td colspan="10" class="empty">Aún no hay operaciones cerradas.</td></tr></tbody>
     </table>
   </div>
 
@@ -208,9 +216,14 @@ function scorePill(s){
   return'<span class="score-pill '+cls+'">'+s+'</span>';
 }
 
-function timerBar(hoursLeft, totalHours, waitingRecovery){
+function timerBar(hoursLeft, totalHours, waitingRecovery, trailingActive){
+  if(trailingActive){
+    return'<div class="timer-wrap">'+
+      '<div class="timer-bar-bg"><div class="timer-bar-fill" style="width:100%;background:#a78bfa;animation:pulse 2s ease-in-out infinite"></div></div>'+
+      '<span class="timer-text" style="color:#a78bfa">Trailing activo</span>'+
+    '</div>';
+  }
   if(waitingRecovery){
-    // Past 24h, negative, waiting to recover to positive
     return'<div class="timer-wrap">'+
       '<div class="timer-bar-bg"><div class="timer-bar-fill" style="width:100%;background:#f59e0b;animation:pulse 1.5s ease-in-out infinite"></div></div>'+
       '<span class="timer-text" style="color:#f59e0b">Esperando +</span>'+
@@ -290,16 +303,33 @@ function loadData(){
     // Open positions
     var ob=document.getElementById("open-body");
     if(!d.open||!d.open.length){
-      ob.innerHTML='<tr><td colspan="7" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ '+d.min_score+'.</td></tr>';
+      ob.innerHTML='<tr><td colspan="9" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ '+d.min_score+'.</td></tr>';
     } else {
       ob.innerHTML=d.open.map(function(p){
+        // Trailing badge
+        var trailingHtml;
+        if(p.trailing_active){
+          var drop=p.trailing_drop!=null?p.trailing_drop:0;
+          var dropCol=drop<=-1.5?"#e05252":drop<=-1?"#fbbf24":"#a78bfa";
+          trailingHtml='<span class="trailing-badge trailing-on">⟳ ACTIVO</span>'+
+            '<div class="trailing-drop" style="color:'+dropCol+';margin-top:2px">'+
+            (drop>=0?"+":"")+drop.toFixed(2)+'% vs máx</div>';
+        } else {
+          trailingHtml='<span class="trailing-badge trailing-off">— espera</span>';
+        }
+        // Peak price
+        var peakHtml=p.peak_price&&p.peak_price>p.entry_price
+          ?'<span style="color:#a78bfa">€'+p.peak_price+'</span>'
+          :'<span class="muted">€'+(p.peak_price||p.entry_price)+'</span>';
         return'<tr>'+
           '<td>'+p.name+' <span class="muted" style="font-size:9px">'+p.ticker+'</span></td>'+
           '<td>'+scorePill(p.entry_score)+'</td>'+
           '<td>€'+p.entry_price+'</td>'+
+          '<td>'+peakHtml+'</td>'+
           '<td>€'+p.current_price+'</td>'+
           '<td class="'+cc(p.ret_pct)+'">'+fmt(p.ret_pct)+'</td>'+
-          '<td>'+timerBar(p.hours_left, d.hold_hours, p.waiting_recovery)+'</td>'+
+          '<td>'+trailingHtml+'</td>'+
+          '<td>'+timerBar(p.hours_left, d.hold_hours, p.waiting_recovery, p.trailing_active)+'</td>'+
           '<td><button class="btn-sell" onclick="sellPosition(\''+p.ticker+'\',this)">Vender</button></td>'+
         '</tr>';
       }).join("");
@@ -308,20 +338,26 @@ function loadData(){
     // Closed trades
     var cb=document.getElementById("closed-body");
     if(!d.closed||!d.closed.length){
-      cb.innerHTML='<tr><td colspan="9" class="empty">Aún no hay operaciones cerradas. Las posiciones se cierran automáticamente a las 24h.</td></tr>';
+      cb.innerHTML='<tr><td colspan="10" class="empty">Aún no hay operaciones cerradas.</td></tr>';
     } else {
       cb.innerHTML=d.closed.map(function(t){
         var cls=cc(t.ret_pct);
+        var peakHtml=t.peak_price&&t.peak_price>t.entry_price
+          ?'<span style="color:#a78bfa">€'+t.peak_price+'</span>'
+          :'<span class="muted">€'+(t.peak_price||t.entry_price)+'</span>';
+        var reasonCol=t.reason&&(t.reason.indexOf('Stop')===0||t.reason.indexOf('Trailing')===0)?'#e05252'
+          :t.reason&&t.reason.indexOf('trailing')>=0?'#a78bfa':'var(--muted)';
         return'<tr>'+
           '<td>'+t.name+' <span class="muted" style="font-size:9px">'+t.ticker+'</span></td>'+
           '<td>'+scorePill(t.entry_score)+'</td>'+
           '<td class="muted">'+t.entry_date+'</td>'+
           '<td class="muted">'+t.exit_date+'</td>'+
           '<td>€'+t.entry_price+'</td>'+
+          '<td>'+peakHtml+'</td>'+
           '<td>€'+t.exit_price+'</td>'+
           '<td class="'+cls+'">'+fmt(t.ret_pct)+'</td>'+
           '<td class="'+cls+'">'+(t.pnl>=0?"+":"")+'€'+t.pnl.toFixed(0)+'</td>'+
-          '<td class="muted" style="font-size:10px;color:'+(t.reason&&t.reason.indexOf('Stop')===0?'#e05252':'var(--muted)')+'">'+t.reason+'</td>'+
+          '<td class="muted" style="font-size:10px;color:'+reasonCol+'">'+t.reason+'</td>'+
         '</tr>';
       }).join("");
     }
