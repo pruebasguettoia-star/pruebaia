@@ -150,8 +150,8 @@ lock  = threading.Lock()
 # Fundamentals cache — refreshed every 60 min (P/E and div don't change per refresh cycle)
 _fund_cache = {}
 _fund_lock  = threading.Lock()
-_FUND_TTL   = 3600
-_FUND_MAX   = 100  # máximo entradas — evita crecimiento indefinido
+_FUND_TTL   = 86400  # 24h — P/E y dividendo cambian rarísimo
+_FUND_MAX   = 100
 
 def _fund_cache_prune():
     """Eliminar entradas más antiguas si el cache supera el límite."""
@@ -724,7 +724,7 @@ def index():
 # ══════════════════════════════════════════════════════════════════════════════
 PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.json")
 PAPER2_INITIAL_CAP  = 10000.0
-PAPER2_POSITION_PCT = 0.20   # 20% of capital per trade
+PAPER2_POSITION_PCT = 0.10   # 10% of capital per trade
 PAPER2_MIN_SCORE    = 85     # minimum inv_score to open a position
 PAPER2_HOLD_HOURS   = 24     # sell exactly 24h after entry
 
@@ -1357,9 +1357,33 @@ def api_data():
     return resp
 
 
+# ── LRU cache para /api/chart y /api/dist ────────────────────────────────────
+# Máx 10 tickers, TTL 15 min — evita re-descargar 2y/10y de datos en cada clic
+_CHART_CACHE: dict = {}   # {ticker: {"ts": float, "data": dict}}
+_DIST_CACHE:  dict = {}
+_CHART_TTL  = 900   # 15 min
+_CHART_MAX  = 10
+
+def _cache_get(store, ticker):
+    entry = store.get(ticker)
+    if entry and (time.monotonic() - entry["ts"]) < _CHART_TTL:
+        return entry["data"]
+    return None
+
+def _cache_set(store, ticker, data):
+    # Evictar el más antiguo si se supera el límite
+    if len(store) >= _CHART_MAX and ticker not in store:
+        oldest = min(store, key=lambda k: store[k]["ts"])
+        del store[oldest]
+    store[ticker] = {"ts": time.monotonic(), "data": data}
+
+
 @app.route("/api/chart/<ticker>")
 def api_chart(ticker):
-    """Return OHLCV + indicators for charting (last 12 months)."""
+    """Return OHLCV + indicators for charting (last 2 years). LRU cache 15 min."""
+    cached = _cache_get(_CHART_CACHE, ticker)
+    if cached:
+        return jsonify(cached)
     try:
         t    = yf.Ticker(ticker)
         hist = t.history(period="2y", auto_adjust=True)
@@ -1426,7 +1450,7 @@ def api_chart(ticker):
                 "volume": vol,
             })
 
-        return jsonify({
+        result = {
             "ticker":  ticker,
             "candles": candles,
             "rsi":     series(rsi_s),
@@ -1435,7 +1459,9 @@ def api_chart(ticker):
             "sma50":   series(sma50),
             "sma200":  series(sma200),
             "signals": signals,
-        })
+        }
+        _cache_set(_CHART_CACHE, ticker, result)
+        return jsonify(result)
     except Exception as e:
         print(f"[chart] Error {ticker}: {e}")
         return jsonify({"error": str(e)}), 500
@@ -1462,7 +1488,10 @@ def favicon():
 
 @app.route("/api/dist/<ticker>")
 def api_dist(ticker):
-    """Return 10-year historical return distribution for a ticker."""
+    """Return 10-year historical return distribution for a ticker. LRU cache 15 min."""
+    cached = _cache_get(_DIST_CACHE, ticker)
+    if cached:
+        return jsonify(cached)
     try:
         t    = yf.Ticker(ticker)
         hist = t.history(period="10y", auto_adjust=True)
@@ -1541,7 +1570,7 @@ def api_dist(ticker):
         except Exception:
             pass
 
-        return jsonify({
+        result = {
             "ticker":        ticker,
             "n_samples":     n,
             "years":         round(n / 252, 1),
@@ -1557,7 +1586,9 @@ def api_dist(ticker):
             "bucket_labels": bucket_labels,
             "seasonality":   seasonality,
             "beta":          beta_dist,
-        })
+        }
+        _cache_set(_DIST_CACHE, ticker, result)
+        return jsonify(result)
     except Exception as e:
         print(f"[dist] Error {ticker}: {e}")
         return jsonify({"error": str(e)}), 500
@@ -1597,19 +1628,9 @@ def api_wake():
 # arranque si Flask usa use_reloader=True en desarrollo.
 _bg_started = False
 def _start_background():
-    global _bg_started, _paper2_mem, _paper4_mem
+    global _bg_started
     if not _bg_started:
         _bg_started = True
-        # ── Reset papers: borrar JSONs y memoria para arrancar desde 10.000 ──
-        # QUITAR estas líneas una vez hecho el reset inicial
-        for _f in [PAPER2_FILE, PAPER4_FILE]:
-            try:
-                if os.path.exists(_f): os.remove(_f)
-            except Exception: pass
-        _paper2_mem = None
-        _paper4_mem = None
-        print("[boot] papers reseteados — arrancan desde 10.000")
-        # ─────────────────────────────────────────────────────────────────────
         t = threading.Thread(target=background_refresh, daemon=True)
         t.start()
         print("[boot] background_refresh thread arrancado")
