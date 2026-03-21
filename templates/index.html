@@ -1227,8 +1227,10 @@
   function rsiCellDiv(v, div) {
     if (v === null || v === undefined) return `<td class="rsi-col rsi-neu">—</td>`;
     let cls = v >= 70 ? "rsi-ob" : v <= 30 ? "rsi-os" : "rsi-neu";
-    const divClass = div==="bullish"?"rsi-divbull":div==="bearish"?"rsi-divbear":"";
-    return `<td class="rsi-col ${cls} ${divClass}">${v.toFixed(0)}</td>`;
+    let divMark = "";
+    if (div === "bullish") divMark = `<sup style="color:#4ade80;font-size:8px;margin-left:1px">↗</sup>`;
+    else if (div === "bearish") divMark = `<sup style="color:#fca5a5;font-size:8px;margin-left:1px">↘</sup>`;
+    return `<td class="rsi-col ${cls}">${v.toFixed(0)}${divMark}</td>`;
   }
 
   function volCell(v) {
@@ -1312,7 +1314,10 @@
         html += `<tr class="data-row" style="cursor:pointer" onclick="openChart('${r.ticker}','${r.name}')">
           <td class="name-col">${r.name}</td>
           <td class="ticker-col">${r.ticker}</td>
-          <td class="price-col">${fmtPrice(r.price)}</td>
+          <td class="price-col">${fmtPrice(r.price)}${r.market_open
+            ? `<sup style="color:#34b566;font-size:7px;margin-left:2px" title="Mercado abierto — precio en tiempo real">●</sup>`
+            : `<sup style="color:#555e6e;font-size:7px;margin-left:2px" title="Mercado cerrado — último precio de cierre">○</sup>`
+          }</td>
           ${bar52(r.pos52)}
           <td class="spark-col"><canvas class="spark" width="80" height="28" data-points="${(r.sparkline||[]).join(',')}"></canvas></td>
           ${signalCell(r.signal)}
