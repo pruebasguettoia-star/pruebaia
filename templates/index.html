@@ -1314,7 +1314,7 @@
         html += `<tr class="data-row" style="cursor:pointer" onclick="openChart('${r.ticker}','${r.name}')">
           <td class="name-col">${r.name}</td>
           <td class="ticker-col">${r.ticker}</td>
-          <td class="price-col">${fmtPrice(r.price)}${r.market_open
+          <td class="price-col">${r.currency === "EUR" ? "€" : ""}${fmtPrice(r.price)}${r.market_open
             ? `<sup style="color:#34b566;font-size:7px;margin-left:2px" title="Mercado abierto — precio en tiempo real">●</sup>`
             : `<sup style="color:#555e6e;font-size:7px;margin-left:2px" title="Mercado cerrado — último precio de cierre">○</sup>`
           }</td>
