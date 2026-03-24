@@ -43,6 +43,13 @@ def _alpaca_key():    return os.environ.get("ALPACA_API_KEY", "")
 def _alpaca_secret(): return os.environ.get("ALPACA_SECRET_KEY", "")
 def _alpaca_url():    return os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
+# ── Diagnóstico de variables de entorno al arrancar ───────────────────────────
+_diag_key = os.environ.get("ALPACA_API_KEY", "")
+_diag_sec = os.environ.get("ALPACA_SECRET_KEY", "")
+print(f"[diag] ALPACA_API_KEY={'SET('+str(len(_diag_key))+' chars)' if _diag_key else 'NOT SET'}")
+print(f"[diag] ALPACA_SECRET_KEY={'SET('+str(len(_diag_sec))+' chars)' if _diag_sec else 'NOT SET'}")
+print(f"[diag] ALPACA_BASE_URL={os.environ.get('ALPACA_BASE_URL', 'NOT SET')}")
+
 # Tickers de paper2 que Alpaca puede ejecutar (cotizados en NYSE/NASDAQ en USD)
 ALPACA_TRADEABLE = {
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",  # MAG7
