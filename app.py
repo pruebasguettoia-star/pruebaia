@@ -32,7 +32,16 @@ app = Flask(__name__)
 ALPACA_KEY     = os.environ.get("ALPACA_API_KEY", "")
 ALPACA_SECRET  = os.environ.get("ALPACA_SECRET_KEY", "")
 ALPACA_URL     = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-ALPACA_ENABLED = bool(ALPACA_KEY and ALPACA_SECRET)
+
+def _alpaca_enabled():
+    """Lee las variables en tiempo de ejecución — evita el problema de carga anticipada de gunicorn."""
+    key    = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    return bool(key and secret)
+
+def _alpaca_key():    return os.environ.get("ALPACA_API_KEY", "")
+def _alpaca_secret(): return os.environ.get("ALPACA_SECRET_KEY", "")
+def _alpaca_url():    return os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 # Tickers de paper2 que Alpaca puede ejecutar (cotizados en NYSE/NASDAQ en USD)
 ALPACA_TRADEABLE = {
@@ -47,8 +56,8 @@ ALPACA_TRADEABLE = {
 
 def _alpaca_headers():
     return {
-        "APCA-API-KEY-ID":     ALPACA_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_SECRET,
+        "APCA-API-KEY-ID":     _alpaca_key(),
+        "APCA-API-SECRET-KEY": _alpaca_secret(),
         "Content-Type":        "application/json",
     }
 
@@ -57,7 +66,7 @@ def alpaca_place_order(ticker, side, notional_usd):
     side: 'buy' o 'sell'
     notional_usd: importe en USD (para compras fraccionarias)
     Devuelve el order_id si tiene éxito, None si falla."""
-    if not ALPACA_ENABLED:
+    if not _alpaca_enabled():
         print("[alpaca] desactivado — configura ALPACA_API_KEY y ALPACA_SECRET_KEY")
         return None
     if ticker not in ALPACA_TRADEABLE:
@@ -88,7 +97,7 @@ def alpaca_place_order(ticker, side, notional_usd):
 
         data = json.dumps(payload).encode()
         req  = urllib.request.Request(
-            f"{ALPACA_URL}/v2/orders",
+            f"{_alpaca_url()}/v2/orders",
             data=data, headers=_alpaca_headers(), method="POST"
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -105,7 +114,7 @@ def alpaca_get_position_qty(ticker):
     try:
         import urllib.request
         req = urllib.request.Request(
-            f"{ALPACA_URL}/v2/positions/{ticker}",
+            f"{_alpaca_url()}/v2/positions/{ticker}",
             headers=_alpaca_headers(), method="GET"
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -116,12 +125,12 @@ def alpaca_get_position_qty(ticker):
 
 def alpaca_get_account():
     """Devuelve info de la cuenta de Alpaca (para el dashboard)."""
-    if not ALPACA_ENABLED:
+    if not _alpaca_enabled():
         return None
     try:
         import urllib.request
         req = urllib.request.Request(
-            f"{ALPACA_URL}/v2/account",
+            f"{_alpaca_url()}/v2/account",
             headers=_alpaca_headers(), method="GET"
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -130,8 +139,8 @@ def alpaca_get_account():
         print(f"[alpaca] error obteniendo cuenta: {e}")
         return None
 
-if ALPACA_ENABLED:
-    print(f"[boot] Alpaca activado — {ALPACA_URL}")
+if _alpaca_enabled():
+    print(f"[boot] Alpaca activado — {_alpaca_url()}")
 else:
     print("[boot] Alpaca desactivado — configura ALPACA_API_KEY y ALPACA_SECRET_KEY en Railway")
 
@@ -1540,14 +1549,14 @@ def api_dist(ticker):
 @app.route("/api/alpaca/status")
 def api_alpaca_status():
     """Estado de la cuenta de Alpaca — para mostrar en el dashboard."""
-    if not ALPACA_ENABLED:
+    if not _alpaca_enabled():
         return jsonify({"enabled": False, "msg": "Configura ALPACA_API_KEY y ALPACA_SECRET_KEY en Railway"})
     acct = alpaca_get_account()
     if not acct:
         return jsonify({"enabled": True, "error": "No se pudo conectar con Alpaca"})
     return jsonify({
         "enabled":        True,
-        "paper":          "paper" in ALPACA_URL,
+        "paper":          "paper" in _alpaca_url(),
         "equity":         acct.get("equity"),
         "cash":           acct.get("cash"),
         "buying_power":   acct.get("buying_power"),
@@ -1558,12 +1567,12 @@ def api_alpaca_status():
 @app.route("/api/alpaca/positions")
 def api_alpaca_positions():
     """Posiciones abiertas en Alpaca."""
-    if not ALPACA_ENABLED:
+    if not _alpaca_enabled():
         return jsonify({"enabled": False})
     try:
         import urllib.request
         req = urllib.request.Request(
-            f"{ALPACA_URL}/v2/positions",
+            f"{_alpaca_url()}/v2/positions",
             headers=_alpaca_headers(), method="GET"
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
