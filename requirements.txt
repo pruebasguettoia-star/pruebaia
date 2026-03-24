@@ -4,3 +4,4 @@ pandas>=2.0.0
 numpy>=1.26.0
 flask-compress>=1.14
 gunicorn>=21.2.0
+alpaca-py>=0.15.0
