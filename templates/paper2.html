@@ -113,7 +113,6 @@ tr:hover td{background:#161a21;}
   <span class="nav-brand">Market Tracker</span>
   <a class="nav-tab" href="/">📊 Mercado</a>
   <a class="nav-tab active" href="/paper2">⚡ Score85</a>
-  <a class="nav-tab" href="/paper4">🎯 Combo 24h</a>
   <div class="nav-right">
     <span id="last-update" style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">—</span>
     <button class="btn" onclick="loadData()">↺ Actualizar</button>
@@ -125,7 +124,6 @@ tr:hover td{background:#161a21;}
 <div class="mobile-menu" id="mobile-menu">
   <a class="nav-tab" href="/">📊 Mercado</a>
   <a class="nav-tab active" href="/paper2">⚡ Score85</a>
-  <a class="nav-tab" href="/paper4">🎯 Combo 24h</a>
   <div class="mobile-menu-divider"></div>
   <div class="mobile-menu-grid">
     <button class="btn" onclick="loadData();closeMobileMenu()">↺ Actualizar</button>
@@ -139,6 +137,15 @@ tr:hover td{background:#161a21;}
     <span>Compra cuando Score ≥ 85</span> &nbsp;·&nbsp;
     <span>24h → mantiene si Score ≥ 85 + trailing 2%</span> &nbsp;·&nbsp;
     <span>Stop loss −7% · 10% capital por posición</span>
+  </div>
+
+  <!-- Alpaca status -->
+  <div id="alpaca-card" style="display:none;background:#0d1018;border:1px solid #1e2530;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-family:var(--font-mono);font-size:10px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="alpaca-dot" style="width:8px;height:8px;border-radius:50%;background:#555e6e;display:inline-block"></span>
+      <span id="alpaca-label" style="color:#555e6e">Alpaca — cargando…</span>
+    </div>
+    <div id="alpaca-details" style="display:flex;gap:20px;flex-wrap:wrap;"></div>
   </div>
 
   <div class="cards">
@@ -382,6 +389,41 @@ function resetPaper(){
 loadData();
 setInterval(loadData,30000);
 window.addEventListener("resize",function(){fetch("/api/paper2").then(function(r){return r.json();}).then(function(d){if(d.equity_log)drawChart(d.equity_log);});});
+
+// ── Alpaca status ─────────────────────────────────────────────────────────────
+function loadAlpacaStatus(){
+  fetch("/api/alpaca/status").then(function(r){return r.json();}).then(function(d){
+    var card=document.getElementById("alpaca-card");
+    var dot=document.getElementById("alpaca-dot");
+    var label=document.getElementById("alpaca-label");
+    var details=document.getElementById("alpaca-details");
+    card.style.display="flex";
+    if(!d.enabled){
+      dot.style.background="#555e6e";
+      label.textContent="Alpaca desactivado — configura las API keys en Railway";
+      return;
+    }
+    if(d.error){
+      dot.style.background="#e05252";
+      label.textContent="Alpaca — error de conexión";
+      return;
+    }
+    dot.style.background=d.paper?"#f59e0b":"#34b566";
+    label.textContent="Alpaca "+(d.paper?"Paper Trading":"Live Trading")+" · "+d.status;
+    var items=[
+      {l:"Equity",v:"$"+parseFloat(d.equity).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})},
+      {l:"Cash",v:"$"+parseFloat(d.cash).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})},
+      {l:"Buying Power",v:"$"+parseFloat(d.buying_power).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})},
+    ];
+    details.innerHTML=items.map(function(i){
+      return'<div><span style="color:#555e6e">'+i.l+'</span> <span style="color:#c8d0de;margin-left:4px">'+i.v+'</span></div>';
+    }).join("");
+  }).catch(function(){
+    document.getElementById("alpaca-label").textContent="Alpaca — sin respuesta";
+  });
+}
+loadAlpacaStatus();
+setInterval(loadAlpacaStatus, 60000);
 </script>
 
 <!-- Bottom Mobile Nav -->
