@@ -21,6 +21,120 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── ALPACA INTEGRATION ────────────────────────────────────────────────────────
+# Configura las variables de entorno en Railway:
+#   ALPACA_API_KEY    → tu API Key ID de Alpaca
+#   ALPACA_SECRET_KEY → tu Secret Key de Alpaca
+#   ALPACA_BASE_URL   → https://paper-api.alpaca.markets (paper) o
+#                       https://api.alpaca.markets (live)
+# ══════════════════════════════════════════════════════════════════════════════
+ALPACA_KEY     = os.environ.get("ALPACA_API_KEY", "")
+ALPACA_SECRET  = os.environ.get("ALPACA_SECRET_KEY", "")
+ALPACA_URL     = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_ENABLED = bool(ALPACA_KEY and ALPACA_SECRET)
+
+# Tickers de paper2 que Alpaca puede ejecutar (cotizados en NYSE/NASDAQ en USD)
+ALPACA_TRADEABLE = {
+    "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",  # MAG7
+    "TLT","SHY","AGG","HYG","TIP",                       # Bonds ETFs
+    "URTH","EEM","IWM","RSP",                             # Major indices ETFs
+    "EWZ","EWW","ARGT","ECH","EPU",                       # LATAM ETFs
+    "EWY","MCHI","EWT","VNM",                             # Asia ETFs en NYSE
+    "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",  # US Sectors
+    "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",  # EU Sectors en NYSE
+}
+
+def _alpaca_headers():
+    return {
+        "APCA-API-KEY-ID":     ALPACA_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_SECRET,
+        "Content-Type":        "application/json",
+    }
+
+def alpaca_place_order(ticker, side, notional_usd):
+    """Envía una orden de mercado a Alpaca.
+    side: 'buy' o 'sell'
+    notional_usd: importe en USD (para compras fraccionarias)
+    Devuelve el order_id si tiene éxito, None si falla."""
+    if not ALPACA_ENABLED:
+        print("[alpaca] desactivado — configura ALPACA_API_KEY y ALPACA_SECRET_KEY")
+        return None
+    if ticker not in ALPACA_TRADEABLE:
+        print(f"[alpaca] {ticker} no operable en Alpaca — omitiendo")
+        return None
+    try:
+        import urllib.request
+        payload = {
+            "symbol":        ticker,
+            "side":          side,
+            "type":          "market",
+            "time_in_force": "day",
+        }
+        if side == "buy":
+            # Orden por importe en USD (fractional shares)
+            payload["notional"] = str(round(notional_usd, 2))
+        else:
+            # Venta: liquidar posición completa
+            payload["qty"] = None  # se sobreescribe abajo con la qty real
+        # Para ventas, primero obtenemos la posición actual en Alpaca
+        if side == "sell":
+            pos_qty = alpaca_get_position_qty(ticker)
+            if pos_qty is None or float(pos_qty) <= 0:
+                print(f"[alpaca] no hay posición abierta en Alpaca para {ticker}")
+                return None
+            payload["qty"] = pos_qty
+            payload.pop("notional", None)
+
+        data = json.dumps(payload).encode()
+        req  = urllib.request.Request(
+            f"{ALPACA_URL}/v2/orders",
+            data=data, headers=_alpaca_headers(), method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        order_id = result.get("id")
+        print(f"[alpaca] orden {side} {ticker} enviada — id: {order_id} status: {result.get('status')}")
+        return order_id
+    except Exception as e:
+        print(f"[alpaca] error en orden {side} {ticker}: {e}")
+        return None
+
+def alpaca_get_position_qty(ticker):
+    """Obtiene la cantidad de un ticker en la cuenta de Alpaca."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{ALPACA_URL}/v2/positions/{ticker}",
+            headers=_alpaca_headers(), method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        return result.get("qty")
+    except Exception:
+        return None
+
+def alpaca_get_account():
+    """Devuelve info de la cuenta de Alpaca (para el dashboard)."""
+    if not ALPACA_ENABLED:
+        return None
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{ALPACA_URL}/v2/account",
+            headers=_alpaca_headers(), method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"[alpaca] error obteniendo cuenta: {e}")
+        return None
+
+if ALPACA_ENABLED:
+    print(f"[boot] Alpaca activado — {ALPACA_URL}")
+else:
+    print("[boot] Alpaca desactivado — configura ALPACA_API_KEY y ALPACA_SECRET_KEY en Railway")
+
 # Gzip: reduce el payload de /api/data ~70% (76 tickers → ~400KB → ~60KB)
 try:
     from flask_compress import Compress
@@ -763,11 +877,6 @@ def background_refresh():
                 print("[bg] paper2 actualizado")
             except Exception as e:
                 print(f"[bg] paper2 error: {e}")
-            try:
-                run_paper4_trading(market_data)
-                print("[bg] paper4 actualizado")
-            except Exception as e:
-                print(f"[bg] paper4 error: {e}")
         # Forzar GC tras el ciclo completo — devuelve RAM al OS inmediatamente
         # (Python no libera al OS por sí solo hasta el siguiente GC automático)
         gc.collect()
@@ -965,6 +1074,12 @@ def run_paper2_trading(market_data):
                 })
                 if needs_cooldown:
                     pt["cooldowns"][ticker] = (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M")
+                # ── Enviar orden de venta a Alpaca ────────────────────────────
+                threading.Thread(
+                    target=alpaca_place_order,
+                    args=(ticker, "sell", 0),
+                    daemon=True
+                ).start()
                 changed = True
             else:
                 # Actualizar estado visible de la posición
@@ -1019,6 +1134,15 @@ def run_paper2_trading(market_data):
                     "waiting_recovery": False,
                 })
                 open_tickers.add(ticker)
+                # ── Enviar orden de compra a Alpaca ───────────────────────────
+                # Convertir posición EUR → USD para la orden de Alpaca
+                fx = get_eurusd()  # factor EUR/USD actual
+                notional_usd = position_size / fx if fx > 0 else position_size
+                threading.Thread(
+                    target=alpaca_place_order,
+                    args=(ticker, "buy", notional_usd),
+                    daemon=True
+                ).start()
                 changed = True
 
         # ── Log equity ────────────────────────────────────────────────────────
@@ -1111,269 +1235,6 @@ def api_paper2_sell():
             "hours_held":   pos.get("hours_held", "—"),
         })
         save_paper2(pt)
-    return jsonify({"status": "sold"})
-
-# ── PAPER TRADING 4 — Combo Score ≥ 80 + Signal buy/strong_buy, salida 24h ───
-# Entry:  inv_score ≥ 80 AND signal in (buy, strong_buy)
-# Exit:   24h elapsed + ret ≥ 0% | stop loss -7% | take profit +10%
-# Cooldown: 48h after stop loss or RSI exit before re-entering same ticker
-PAPER4_FILE         = os.path.join(os.path.dirname(__file__), "paper4_trades.json")
-PAPER4_INITIAL_CAP  = 10000.0
-PAPER4_POSITION_PCT = 0.20
-PAPER4_MIN_SCORE    = 80
-PAPER4_TAKE_PROFIT  = 10.0
-PAPER4_STOP_LOSS    = -7.0
-PAPER4_HOLD_HOURS   = 24
-
-paper4_lock = threading.Lock()
-
-# ── Estado en memoria para paper4 ────────────────────────────────────────────
-_paper4_mem: dict | None = None
-
-def load_paper4():
-    global _paper4_mem
-    if _paper4_mem is not None:
-        return _paper4_mem
-    if os.path.exists(PAPER4_FILE):
-        try:
-            with open(PAPER4_FILE) as f:
-                _paper4_mem = json.load(f)
-            print(f"[paper4] cargado desde disco: {len(_paper4_mem.get('closed',[]))} trades cerrados")
-            return _paper4_mem
-        except Exception as e:
-            print(f"[paper4] error leyendo JSON: {e}")
-    _paper4_mem = {"capital": PAPER4_INITIAL_CAP, "open": [], "closed": [], "equity_log": [], "cooldowns": {}}
-    return _paper4_mem
-
-def save_paper4(data):
-    global _paper4_mem
-    _paper4_mem = data  # mantener en memoria siempre actualizado
-    tmp = PAPER4_FILE + ".tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, PAPER4_FILE)
-    except Exception as e:
-        print(f"[paper4] error guardando JSON: {e}")
-
-def run_paper4_trading(market_data):
-    """Combo Score≥80 + Signal, exit after 24h if positive (wait if negative, SL -7%, TP +10%).
-    48h cooldown after stop loss exit."""
-    with paper4_lock:
-        pt = load_paper4()
-        if "cooldowns" not in pt:
-            pt["cooldowns"] = {}
-        now_dt  = datetime.now()
-        now_str = now_dt.strftime("%Y-%m-%d %H:%M")
-        changed = False
-
-        ticker_map = {}
-        for group_rows in market_data.values():
-            for row in group_rows:
-                ticker_map[row["ticker"]] = row
-
-        # ── Clean expired cooldowns ───────────────────────────────────────────
-        expired = [t for t, until in pt["cooldowns"].items()
-                   if datetime.strptime(until, "%Y-%m-%d %H:%M") <= now_dt]
-        for t in expired:
-            del pt["cooldowns"][t]
-        if expired:
-            changed = True
-
-        # ── Check exits ───────────────────────────────────────────────────────
-        COOLDOWN_HOURS = 48.0
-
-        still_open = []
-        for pos in pt["open"]:
-            ticker = pos["ticker"]
-            row    = ticker_map.get(ticker)
-
-            entry_dt   = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
-            hours_held = (now_dt - entry_dt).total_seconds() / 3600
-            current_price = row["price"] if row else pos.get("current_price", pos["entry_price"])
-            ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
-
-            exit_reason = None
-            needs_cooldown = False
-
-            if ret_pct >= PAPER4_TAKE_PROFIT:
-                exit_reason = f"Take profit +{ret_pct:.1f}%"
-            elif ret_pct <= PAPER4_STOP_LOSS:
-                exit_reason = f"Stop loss {ret_pct:.1f}%"
-                needs_cooldown = True
-            elif hours_held >= PAPER4_HOLD_HOURS:
-                if ret_pct >= 0:
-                    exit_reason = f"24h cumplidas ({hours_held:.1f}h)"
-                elif ret_pct <= PAPER4_STOP_LOSS:
-                    exit_reason = f"Stop loss {ret_pct:.1f}% ({hours_held:.1f}h)"
-                    needs_cooldown = True
-                # else: still negative past 24h, waiting for recovery
-
-            if exit_reason:
-                pnl = pos["shares"] * (current_price - pos["entry_price"])
-                pt["capital"] += pos["shares"] * current_price
-                pt["closed"].append({
-                    "ticker":        ticker,
-                    "name":          pos["name"],
-                    "entry_date":    pos["entry_date"],
-                    "exit_date":     now_str,
-                    "entry_price":   pos["entry_price"],
-                    "exit_price":    round(current_price, 2),
-                    "shares":        pos["shares"],
-                    "ret_pct":       round(ret_pct, 2),
-                    "pnl":           round(pnl, 2),
-                    "reason":        exit_reason,
-                    "entry_score":   pos.get("entry_score", "—"),
-                    "entry_signal":  pos.get("entry_signal", "—"),
-                    "hours_held":    round(hours_held, 1),
-                })
-                if needs_cooldown:
-                    cooldown_until = (now_dt + timedelta(hours=COOLDOWN_HOURS)).strftime("%Y-%m-%d %H:%M")
-                    pt["cooldowns"][ticker] = cooldown_until
-                changed = True
-            else:
-                if row:
-                    pos["current_price"] = round(current_price, 2)
-                    pos["ret_pct"]       = round(ret_pct, 2)
-                    pos["hours_held"]    = round(hours_held, 1)
-                    pos["hours_left"]    = round(max(0, PAPER4_HOLD_HOURS - hours_held), 1)
-                    pos["score"]         = row.get("inv_score")
-                    pos["waiting_recovery"] = hours_held >= PAPER4_HOLD_HOURS and ret_pct < 0
-                still_open.append(pos)
-
-        pt["open"] = still_open
-
-        # ── Check entries — solo si mercado abierto ───────────────────────────
-        open_tickers = {p["ticker"] for p in pt["open"]}
-        if not is_market_hours():
-            print("[paper4] fuera de horario — no se abren posiciones nuevas")
-        else:
-            for ticker, row in ticker_map.items():
-                if ticker in pt["cooldowns"]:
-                    continue
-                score  = row.get("inv_score")
-                signal = row.get("signal", "")
-                trend  = row.get("trend", "")
-                if score is None or score < PAPER4_MIN_SCORE:
-                    continue
-                if signal not in ("buy", "strong_buy"):
-                    continue
-                if trend != "bullish":
-                    continue
-                if ticker in open_tickers:
-                    continue
-                position_size = pt["capital"] * PAPER4_POSITION_PCT
-                if position_size < 1:
-                    continue
-                shares = position_size / row["price"]
-                pt["capital"] -= position_size
-                pt["open"].append({
-                    "ticker":           ticker,
-                    "name":             row["name"],
-                    "entry_date":       now_str,
-                    "entry_price":      round(row["price"], 2),
-                    "current_price":    round(row["price"], 2),
-                    "shares":           round(shares, 6),
-                    "ret_pct":          0.0,
-                    "hours_held":       0.0,
-                    "hours_left":       float(PAPER4_HOLD_HOURS),
-                    "entry_score":      score,
-                    "entry_signal":     signal,
-                    "score":            score,
-                    "waiting_recovery": False,
-                })
-                open_tickers.add(ticker)
-                changed = True
-
-        # ── Equity log ────────────────────────────────────────────────────────
-        open_value   = sum(p["shares"] * ticker_map.get(p["ticker"], {}).get("price", p["entry_price"]) for p in pt["open"])
-        total_equity = round(pt["capital"] + open_value, 2)
-        pt["equity_log"].append({"date": now_str, "equity": total_equity})
-        pt["equity_log"] = pt["equity_log"][-500:]
-
-        if changed or True:
-            save_paper4(pt)
-
-        return pt, ticker_map
-
-@app.route("/paper4")
-def paper4():
-    return render_template("paper4.html")
-
-@app.route("/api/paper4")
-def api_paper4():
-    with lock:
-        market_data = cache.get("data") or {}
-    if not market_data:
-        return jsonify({"error": "no data yet"})
-    pt, ticker_map = run_paper4_trading(market_data)
-
-    open_value   = sum(p["shares"] * ticker_map.get(p["ticker"], {}).get("price", p["entry_price"]) for p in pt["open"])
-    total_equity = round(pt["capital"] + open_value, 2)
-    total_ret    = round((total_equity - PAPER4_INITIAL_CAP) / PAPER4_INITIAL_CAP * 100, 2)
-
-    return jsonify({
-        "capital":      round(pt["capital"], 2),
-        "open_value":   round(open_value, 2),
-        "total_equity": total_equity,
-        "total_ret":    total_ret,
-        "initial":      PAPER4_INITIAL_CAP,
-        "open":         pt["open"],
-        "closed":       list(reversed(pt["closed"])),
-        "equity_log":   pt["equity_log"],
-        "cooldowns":    pt.get("cooldowns", {}),
-        "min_score":    PAPER4_MIN_SCORE,
-        "hold_hours":   PAPER4_HOLD_HOURS,
-    })
-
-@app.route("/api/paper4/reset", methods=["POST"])
-def api_paper4_reset():
-    global _paper4_mem
-    _paper4_mem = None  # limpiar memoria
-    if os.path.exists(PAPER4_FILE):
-        os.remove(PAPER4_FILE)
-    return jsonify({"status": "reset"})
-
-@app.route("/api/paper4/sell", methods=["POST"])
-def api_paper4_sell():
-    ticker = request.json.get("ticker")
-    reason = request.json.get("reason", "Venta manual")
-    if not ticker:
-        return jsonify({"error": "no ticker"}), 400
-    with paper4_lock:
-        pt = load_paper4()
-        with lock:
-            market_data = cache.get("data") or {}
-        ticker_map = {}
-        for group_rows in market_data.values():
-            for row in group_rows:
-                ticker_map[row["ticker"]] = row
-        pos = next((p for p in pt["open"] if p["ticker"] == ticker), None)
-        if not pos:
-            return jsonify({"error": "position not found"}), 404
-        row = ticker_map.get(ticker)
-        current_price = row["price"] if row else pos["entry_price"]
-        ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
-        pnl     = pos["shares"] * (current_price - pos["entry_price"])
-        pt["capital"] += pos["shares"] * current_price
-        pt["open"] = [p for p in pt["open"] if p["ticker"] != ticker]
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        pt["closed"].append({
-            "ticker":        ticker,
-            "name":          pos["name"],
-            "entry_date":    pos["entry_date"],
-            "exit_date":     now_str,
-            "entry_price":   pos["entry_price"],
-            "exit_price":    round(current_price, 2),
-            "shares":        pos["shares"],
-            "ret_pct":       round(ret_pct, 2),
-            "pnl":           round(pnl, 2),
-            "reason":        reason,
-            "entry_score":   pos.get("entry_score", "—"),
-            "entry_signal":  pos.get("entry_signal", "—"),
-            "hours_held":    pos.get("hours_held", "—"),
-        })
-        save_paper4(pt)
     return jsonify({"status": "sold"})
 
 
@@ -1675,6 +1536,61 @@ def api_dist(ticker):
     except Exception as e:
         print(f"[dist] Error {ticker}: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/alpaca/status")
+def api_alpaca_status():
+    """Estado de la cuenta de Alpaca — para mostrar en el dashboard."""
+    if not ALPACA_ENABLED:
+        return jsonify({"enabled": False, "msg": "Configura ALPACA_API_KEY y ALPACA_SECRET_KEY en Railway"})
+    acct = alpaca_get_account()
+    if not acct:
+        return jsonify({"enabled": True, "error": "No se pudo conectar con Alpaca"})
+    return jsonify({
+        "enabled":        True,
+        "paper":          "paper" in ALPACA_URL,
+        "equity":         acct.get("equity"),
+        "cash":           acct.get("cash"),
+        "buying_power":   acct.get("buying_power"),
+        "status":         acct.get("status"),
+        "currency":       acct.get("currency"),
+    })
+
+@app.route("/api/alpaca/positions")
+def api_alpaca_positions():
+    """Posiciones abiertas en Alpaca."""
+    if not ALPACA_ENABLED:
+        return jsonify({"enabled": False})
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{ALPACA_URL}/v2/positions",
+            headers=_alpaca_headers(), method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            positions = json.loads(resp.read())
+        return jsonify({"enabled": True, "positions": positions})
+    except Exception as e:
+        return jsonify({"enabled": True, "error": str(e)})
+
+@app.route("/api/backup")
+def api_backup():
+    """Descarga temporal de los JSON de paper trading. ELIMINAR tras el backup."""
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, mem in [("paper2_trades.json", _paper2_mem)]:
+            if mem is not None:
+                data = json.dumps(mem, indent=2)
+            elif os.path.exists(os.path.join(os.path.dirname(__file__), fname)):
+                with open(os.path.join(os.path.dirname(__file__), fname)) as f:
+                    data = f.read()
+            else:
+                data = "{}"
+            zf.writestr(fname, data)
+    buf.seek(0)
+    from flask import Response as _R
+    return _R(buf.read(), mimetype="application/zip",
+              headers={"Content-Disposition": "attachment; filename=paper_backup.zip"})
 
 @app.route("/api/ping")
 def api_ping():
