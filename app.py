@@ -47,11 +47,13 @@ def _alpaca_url():    return os.environ.get("ALPACA_BASE_URL", "https://paper-ap
 ALPACA_TRADEABLE = {
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",  # MAG7
     "TLT","SHY","AGG","HYG","TIP",                       # Bonds ETFs
-    "URTH","EEM","IWM","RSP",                             # Major indices ETFs
+    "URTH","EEM","IWM","RSP","SPY","QQQ",                # Major indices ETFs
     "EWZ","EWW","ARGT","ECH","EPU",                       # LATAM ETFs
     "EWY","MCHI","EWT","VNM",                             # Asia ETFs en NYSE
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",  # US Sectors
+    "AMD","BAC","COIN","JPM","NFLX",                      # US Stocks
     "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",  # EU Sectors en NYSE
+    "ARKK","IBB","COPX","AG","FCX","GLD","GDX","GDXJ","SILJ","XME","NEM","PPLT","KRE","SOXX","SLV",  # Metals & Mining
 }
 
 def _alpaca_headers():
@@ -170,14 +172,12 @@ alerted = set()
 # ── TICKERS ────────────────────────────────────────────────────────────────────
 GROUPS = {
     "MAJOR INDICES": [
-        ("S&P 500",            "^GSPC"),
         ("MSCI World",         "URTH"),
-        ("NASDAQ Composite",   "^IXIC"),
-        ("Euro STOXX 50",      "^STOXX50E"),
         ("MSCI Emerging Mkts", "EEM"),
         ("Russell 2000",       "IWM"),
         ("S&P 500 Eq. Weight", "RSP"),
-        ("VIX",                "^VIX"),
+        ("S&P 500 ETF",        "SPY"),
+        ("NASDAQ 100 ETF",     "QQQ"),
     ],
     "MAG 7": [
         ("NVIDIA",    "NVDA"),
@@ -204,11 +204,8 @@ GROUPS = {
         ("Copper",        "HG=F"),
         ("Platinum",      "PL=F"),
         ("Wheat",         "ZW=F"),
-        ("Bitcoin",       "BTC-USD"),
-        ("Ethereum",      "ETH-USD"),
     ],
     "CURRENCIES": [
-        ("DXY (USD Index)", "DX-Y.NYB"),
         ("EUR/USD",         "EURUSD=X"),
         ("USD/JPY",         "JPY=X"),
         ("GBP/USD",         "GBPUSD=X"),
@@ -225,11 +222,8 @@ GROUPS = {
         ("Switzerland (SMI)", "^SSMI"),
     ],
     "ASIA": [
-        ("Japan (Nikkei)",   "^N225"),
         ("South Korea",      "EWY"),
-        ("India (Nifty)",    "^NSEI"),
         ("China",            "MCHI"),
-        ("Hong Kong",        "^HSI"),
         ("Taiwan",           "EWT"),
         ("Vietnam",          "VNM"),
     ],
@@ -253,17 +247,38 @@ GROUPS = {
         ("Real Estate",            "XLRE"),
         ("Materials",              "XLB"),
     ],
+    "US STOCKS": [
+        ("AMD",          "AMD"),
+        ("Bank of America","BAC"),
+        ("Coinbase",     "COIN"),
+        ("JPMorgan",     "JPM"),
+        ("Netflix",      "NFLX"),
+    ],
+    "METALS & MINING": [
+        ("ARK Innovation",       "ARKK"),
+        ("Biotech ETF",          "IBB"),
+        ("Copper Miners ETF",    "COPX"),
+        ("First Majestic Silver","AG"),
+        ("Freeport-McMoRan",     "FCX"),
+        ("Gold ETF",             "GLD"),
+        ("Gold Miners",          "GDX"),
+        ("Jr. Gold Miners",      "GDXJ"),
+        ("Jr. Silver Miners",    "SILJ"),
+        ("Metals & Mining ETF",  "XME"),
+        ("Newmont",              "NEM"),
+        ("Platinum ETF",         "PPLT"),
+        ("Reg. Banks ETF",       "KRE"),
+        ("Semiconductors ETF",   "SOXX"),
+        ("Silver ETF",           "SLV"),
+    ],
     "EU SECTORS": [
         ("EU Banks",           "EUFN"),
         ("EU Healthcare",      "IXJ"),
-        ("EU Industrials",     "EXV6.DE"),
         ("EU Energy",          "IXC"),
         ("EU Technology",      "IYW"),
-        ("EU Consumer Staples","EXV5.DE"),
         ("EU Telecoms",        "IXP"),
         ("EU Utilities",       "JXI"),
         ("EU Materials",       "PDBC"),
-        ("EU Real Estate",     "IPRP.L"),
     ],
 }
 
@@ -275,24 +290,27 @@ lock  = threading.Lock()
 # Asiáticos (^N225, ^NSEI, ^HSI) en moneda local — no se convierten
 USD_TICKERS = {
     # Major indices (ETFs en USD)
-    "^GSPC","URTH","^IXIC","EEM","IWM","RSP","^VIX",
+    "URTH","EEM","IWM","RSP","SPY","QQQ",
     # MAG 7
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
     # Bonds (ETFs USD)
     "TLT","SHY","AGG","HYG","TIP",
-    # Commodities (futuros y crypto en USD)
-    "BZ=F","CL=F","NG=F","GC=F","SI=F","HG=F","PL=F","ZW=F","BTC-USD","ETH-USD",
-    # Currencies (pares vs USD — no convertir, son ratios)
+    # Commodities (futuros en USD)
+    "BZ=F","CL=F","NG=F","GC=F","SI=F","HG=F","PL=F","ZW=F",
     # LATAM ETFs en USD
     "EWZ","EWW","ARGT","ECH","EPU",
     # Asia ETFs en USD
     "EWY","MCHI","EWT","VNM",
     # US Sectors
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
+    # US Stocks
+    "AMD","BAC","COIN","JPM","NFLX",
     # EU Sectors ETFs que cotizan en USD en NYSE
     "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC",
     # Italy ETF en USD
     "EWI",
+    # Metals & Mining
+    "ARKK","IBB","COPX","AG","FCX","GLD","GDX","GDXJ","SILJ","XME","NEM","PPLT","KRE","SOXX","SLV",
 }
 
 # Cache del tipo de cambio EUR/USD — se actualiza en cada refresh
@@ -921,7 +939,10 @@ PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.jso
 PAPER2_INITIAL_CAP  = 10000.0
 PAPER2_POSITION_PCT = 0.10   # 10% of capital per trade
 PAPER2_MIN_SCORE    = 85     # minimum inv_score to open a position
-PAPER2_HOLD_HOURS   = 24     # sell exactly 24h after entry
+PAPER2_HOLD_HOURS   = 24
+PAPER2_TRAILING_PCT =  2.0   # % de caída desde máximo para trailing stop
+PAPER2_TRAILING_MIN =  3.0   # % mínimo de retorno para activar trailing en fase 2
+PAPER2_TAKE_PROFIT  =  5.0   # % de retorno para activar trailing inmediatamente (cualquier fase)
 
 paper2_lock = threading.Lock()
 
@@ -968,16 +989,17 @@ def save_paper2(data):
 def run_paper2_trading(market_data):
     """Score≥85 strategy con trailing stop y extensión de posición:
 
-    FASE 1 (0-24h): hold normal.
-      - Stop loss -7% en cualquier momento → vender + cooldown 48h
+    CUALQUIER MOMENTO:
+      - Stop loss -7%        → vender + cooldown 48h
+      - Retorno ≥+5%         → activar trailing stop 2% (captura ganancias)
+
+    FASE 1 (0-24h): hold normal salvo las condiciones anteriores.
 
     FASE 2 (≥24h): depende del estado:
-      A) Positivo + score ≥85 → activar trailing stop 2%
-         - Vender si precio cae 2% desde su máximo histórico en posición
-         - Vender si score baja de 85
-      B) Positivo + score <85  → vender inmediatamente
-      C) Negativo              → aguantar 24h más (hasta 48h total)
-         - Si en algún momento llega a positivo → trailing stop 2%
+      A) Positivo + score ≥85 + retorno ≥3% → activar trailing stop 2%
+      B) Positivo + score ≥85 + retorno <3% → mantener sin trailing
+      C) Positivo + score <85  → vender inmediatamente
+      D) Negativo              → aguantar 24h más (hasta 48h total)
          - Si a las 48h sigue negativo → vender + cooldown 48h
     """
     with paper2_lock:
@@ -1026,6 +1048,13 @@ def run_paper2_trading(market_data):
             exit_reason    = None
             needs_cooldown = False
 
+            # ── Take profit: retorno ≥5% → activar trailing inmediatamente ────
+            if not pos.get("trailing_active") and ret_pct >= PAPER2_TAKE_PROFIT:
+                pos["trailing_active"] = True
+                pos["peak_price"]      = round(current_price, 4)
+                changed = True
+                print(f"[paper2] {ticker} trailing activado por take profit +{ret_pct:.1f}%")
+
             # ── Stop loss duro -7% (cualquier fase) ──────────────────────────
             if ret_pct <= PAPER2_STOP_LOSS:
                 exit_reason    = f"Stop loss {ret_pct:.1f}%"
@@ -1044,12 +1073,12 @@ def run_paper2_trading(market_data):
                 if ret_pct >= 0:
                     # Positivo: ¿score sigue ≥85?
                     if current_score is not None and current_score >= PAPER2_MIN_SCORE:
-                        # Activar trailing stop si no estaba activo
-                        if not pos.get("trailing_active"):
+                        # Activar trailing stop solo si retorno ≥ 3%
+                        if not pos.get("trailing_active") and ret_pct >= PAPER2_TRAILING_MIN:
                             pos["trailing_active"] = True
                             pos["peak_price"]      = round(current_price, 4)
                             changed = True
-                        # No vendemos aún — el trailing stop se encargará
+                        # Si retorno < 3% y score ≥85 → mantener sin trailing aún
                     else:
                         # Score <85 o sin datos → vender inmediatamente
                         exit_reason = f"24h cumplidas, score {current_score} < {PAPER2_MIN_SCORE}"
