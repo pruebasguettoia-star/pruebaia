@@ -45,15 +45,15 @@ def _alpaca_url():    return os.environ.get("ALPACA_BASE_URL", "https://paper-ap
 
 # Tickers de paper2 que Alpaca puede ejecutar (cotizados en NYSE/NASDAQ en USD)
 ALPACA_TRADEABLE = {
-    "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",  # MAG7
-    "TLT","SHY","AGG","HYG","TIP",                       # Bonds ETFs
-    "URTH","EEM","IWM","RSP","SPY","QQQ",                # Major indices ETFs
-    "EWZ","EWW","ARGT","ECH","EPU",                       # LATAM ETFs
-    "EWY","MCHI","EWT","VNM",                             # Asia ETFs en NYSE
+    "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",           # MAG7
+    "AMD","BAC","COIN","JPM","NFLX",                              # US Stocks
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",  # US Sectors
-    "AMD","BAC","COIN","JPM","NFLX",                      # US Stocks
-    "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",  # EU Sectors en NYSE
-    "ARKK","IBB","COPX","AG","FCX","GLD","GDX","GDXJ","SILJ","XME","NEM","PPLT","KRE","SOXX","SLV",  # Metals & Mining
+    "TLT","SHY","AGG","HYG","TIP",                               # Bonds
+    "URTH","EEM","IWM","RSP","SPY","QQQ",                        # Major indices ETFs
+    "GLD","SLV","PPLT","GDX","GDXJ","SILJ","COPX","XME","NEM","FCX","AG","GOLD",  # Metals
+    "ARKK","IBB","SOXX","KRE",                                   # Thematic
+    "EWY","MCHI","EWT","VNM","EWZ","EWW","ARGT","ECH","EPU",    # Internacional
+    "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",          # EU Sectors en NYSE
 }
 
 def _alpaca_headers():
@@ -188,6 +188,26 @@ GROUPS = {
         ("Meta",      "META"),
         ("Tesla",     "TSLA"),
     ],
+    "US STOCKS": [
+        ("AMD",             "AMD"),
+        ("Bank of America", "BAC"),
+        ("Coinbase",        "COIN"),
+        ("JPMorgan",        "JPM"),
+        ("Netflix",         "NFLX"),
+    ],
+    "US SECTORS": [
+        ("Technology",        "XLK"),
+        ("Healthcare",        "XLV"),
+        ("Financials",        "XLF"),
+        ("Consumer Discret.", "XLY"),
+        ("Communication Svcs","XLC"),
+        ("Industrials",       "XLI"),
+        ("Consumer Staples",  "XLP"),
+        ("Energy",            "XLE"),
+        ("Utilities",         "XLU"),
+        ("Real Estate",       "XLRE"),
+        ("Materials",         "XLB"),
+    ],
     "BONDS": [
         ("Long Duration US Bonds", "TLT"),
         ("Short Duration US Bonds","SHY"),
@@ -196,21 +216,37 @@ GROUPS = {
         ("TIPS (Inflation)",      "TIP"),
     ],
     "COMMODITIES": [
-        ("Oil (Brent)",   "BZ=F"),
-        ("Oil (WTI)",     "CL=F"),
-        ("Natural Gas",   "NG=F"),
-        ("Gold",          "GC=F"),
-        ("Silver",        "SI=F"),
-        ("Copper",        "HG=F"),
-        ("Platinum",      "PL=F"),
-        ("Wheat",         "ZW=F"),
+        ("Oil (Brent)", "BZ=F"),
+        ("Oil (WTI)",   "CL=F"),
+        ("Natural Gas", "NG=F"),
+        ("Wheat",       "ZW=F"),
+    ],
+    "METALS & MINING": [
+        ("Gold ETF",             "GLD"),
+        ("Silver ETF",           "SLV"),
+        ("Platinum ETF",         "PPLT"),
+        ("Gold Miners",          "GDX"),
+        ("Jr. Gold Miners",      "GDXJ"),
+        ("Jr. Silver Miners",    "SILJ"),
+        ("Copper Miners ETF",    "COPX"),
+        ("Metals & Mining ETF",  "XME"),
+        ("Newmont",              "NEM"),
+        ("Freeport-McMoRan",     "FCX"),
+        ("First Majestic Silver","AG"),
+        ("Barrick Gold",         "GOLD"),
+    ],
+    "THEMATIC": [
+        ("ARK Innovation",    "ARKK"),
+        ("Biotech ETF",       "IBB"),
+        ("Semiconductors ETF","SOXX"),
+        ("Reg. Banks ETF",    "KRE"),
     ],
     "CURRENCIES": [
-        ("EUR/USD",         "EURUSD=X"),
-        ("USD/JPY",         "JPY=X"),
-        ("GBP/USD",         "GBPUSD=X"),
-        ("USD/CHF",         "CHF=X"),
-        ("USD/CNY",         "CNY=X"),
+        ("EUR/USD", "EURUSD=X"),
+        ("USD/JPY", "JPY=X"),
+        ("GBP/USD", "GBPUSD=X"),
+        ("USD/CHF", "CHF=X"),
+        ("USD/CNY", "CNY=X"),
     ],
     "EUROPE": [
         ("UK (FTSE 100)",     "ISF.L"),
@@ -221,64 +257,25 @@ GROUPS = {
         ("Italy (FTSE MIB)",  "EWI"),
         ("Switzerland (SMI)", "^SSMI"),
     ],
-    "ASIA": [
-        ("South Korea",      "EWY"),
-        ("China",            "MCHI"),
-        ("Taiwan",           "EWT"),
-        ("Vietnam",          "VNM"),
-    ],
-    "LATAM": [
-        ("Brazil",    "EWZ"),
-        ("Mexico",    "EWW"),
-        ("Argentina", "ARGT"),
-        ("Chile",     "ECH"),
-        ("Peru",      "EPU"),
-    ],
-    "US SECTORS": [
-        ("Technology",             "XLK"),
-        ("Healthcare",             "XLV"),
-        ("Financials",             "XLF"),
-        ("Consumer Discret.",      "XLY"),
-        ("Communication Svcs",     "XLC"),
-        ("Industrials",            "XLI"),
-        ("Consumer Staples",       "XLP"),
-        ("Energy",                 "XLE"),
-        ("Utilities",              "XLU"),
-        ("Real Estate",            "XLRE"),
-        ("Materials",              "XLB"),
-    ],
-    "US STOCKS": [
-        ("AMD",          "AMD"),
-        ("Bank of America","BAC"),
-        ("Coinbase",     "COIN"),
-        ("JPMorgan",     "JPM"),
-        ("Netflix",      "NFLX"),
-    ],
-    "METALS & MINING": [
-        ("ARK Innovation",       "ARKK"),
-        ("Biotech ETF",          "IBB"),
-        ("Copper Miners ETF",    "COPX"),
-        ("First Majestic Silver","AG"),
-        ("Freeport-McMoRan",     "FCX"),
-        ("Gold ETF",             "GLD"),
-        ("Gold Miners",          "GDX"),
-        ("Jr. Gold Miners",      "GDXJ"),
-        ("Jr. Silver Miners",    "SILJ"),
-        ("Metals & Mining ETF",  "XME"),
-        ("Newmont",              "NEM"),
-        ("Platinum ETF",         "PPLT"),
-        ("Reg. Banks ETF",       "KRE"),
-        ("Semiconductors ETF",   "SOXX"),
-        ("Silver ETF",           "SLV"),
-    ],
     "EU SECTORS": [
-        ("EU Banks",           "EUFN"),
-        ("EU Healthcare",      "IXJ"),
-        ("EU Energy",          "IXC"),
-        ("EU Technology",      "IYW"),
-        ("EU Telecoms",        "IXP"),
-        ("EU Utilities",       "JXI"),
-        ("EU Materials",       "PDBC"),
+        ("EU Banks",    "EUFN"),
+        ("EU Healthcare","IXJ"),
+        ("EU Energy",   "IXC"),
+        ("EU Technology","IYW"),
+        ("EU Telecoms", "IXP"),
+        ("EU Utilities","JXI"),
+        ("EU Materials","PDBC"),
+    ],
+    "INTERNACIONAL": [
+        ("South Korea", "EWY"),
+        ("China",       "MCHI"),
+        ("Taiwan",      "EWT"),
+        ("Vietnam",     "VNM"),
+        ("Brazil",      "EWZ"),
+        ("Mexico",      "EWW"),
+        ("Argentina",   "ARGT"),
+        ("Chile",       "ECH"),
+        ("Peru",        "EPU"),
     ],
 }
 
@@ -293,24 +290,24 @@ USD_TICKERS = {
     "URTH","EEM","IWM","RSP","SPY","QQQ",
     # MAG 7
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
-    # Bonds (ETFs USD)
-    "TLT","SHY","AGG","HYG","TIP",
-    # Commodities (futuros en USD)
-    "BZ=F","CL=F","NG=F","GC=F","SI=F","HG=F","PL=F","ZW=F",
-    # LATAM ETFs en USD
-    "EWZ","EWW","ARGT","ECH","EPU",
-    # Asia ETFs en USD
-    "EWY","MCHI","EWT","VNM",
-    # US Sectors
-    "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
     # US Stocks
     "AMD","BAC","COIN","JPM","NFLX",
-    # EU Sectors ETFs que cotizan en USD en NYSE
+    # US Sectors
+    "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
+    # Bonds (ETFs USD)
+    "TLT","SHY","AGG","HYG","TIP",
+    # Commodities (futuros sin ETF equivalente)
+    "BZ=F","CL=F","NG=F","ZW=F",
+    # Metals & Mining (ETFs y acciones en USD)
+    "GLD","SLV","PPLT","GDX","GDXJ","SILJ","COPX","XME","NEM","FCX","AG","GOLD",
+    # Thematic
+    "ARKK","IBB","SOXX","KRE",
+    # Internacional ETFs en USD
+    "EWY","MCHI","EWT","VNM","EWZ","EWW","ARGT","ECH","EPU",
+    # EU Sectors ETFs en NYSE (USD)
     "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC",
     # Italy ETF en USD
     "EWI",
-    # Metals & Mining
-    "ARKK","IBB","COPX","AG","FCX","GLD","GDX","GDXJ","SILJ","XME","NEM","PPLT","KRE","SOXX","SLV",
 }
 
 # Cache del tipo de cambio EUR/USD — se actualiza en cada refresh
@@ -459,9 +456,9 @@ def fetch_ticker(name, ticker):
         last_bar = hist.index[-1]
 
         # Separate lightweight fetch for long-term returns (3y price only).
-        # Solo columna Close para reducir RAM por thread.
+        # Usamos 5y para asegurar que siempre hay datos suficientes para 1095 días atrás.
         try:
-            _3y_raw = t.history(period="3y", auto_adjust=True)
+            _3y_raw = t.history(period="5y", auto_adjust=True)
             if not _3y_raw.empty:
                 _3y_raw.index = _3y_raw.index.tz_localize(None) if _3y_raw.index.tzinfo else _3y_raw.index
                 hist_3y = _3y_raw[["Close"]].copy()
@@ -848,9 +845,10 @@ def refresh_data():
 
     # Fetch all tickers concurrently — 5 workers: cap peak RAM en Railway (512MB)
     # Con 8 workers se acumulan ~8 DataFrames de 1y+3y en memoria a la vez (~80MB peak).
-    # Con 5 workers el peak baja a ~50MB; el ciclo tarda ~10s más pero cabe en free tier.
+    # 4 workers: compensar el aumento de RAM por descarga 5y (antes 3y).
+    # Peak ~4 DataFrames × ~8MB = ~32MB, seguro para Railway 512MB.
     row_map = {}
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(fetch_ticker, name, ticker): (group, ticker)
                    for group, name, ticker in all_tasks}
         for fut in as_completed(futures):
@@ -894,8 +892,8 @@ def refresh_data():
 
 def background_refresh():
     while True:
+        t_start = time.monotonic()
         refresh_data()
-        # Actualizar papers en background tras cada ciclo de mercado
         with lock:
             market_data = cache.get("data") or {}
         if market_data:
@@ -904,10 +902,10 @@ def background_refresh():
                 print("[bg] paper2 actualizado")
             except Exception as e:
                 print(f"[bg] paper2 error: {e}")
-        # Forzar GC tras el ciclo completo — devuelve RAM al OS inmediatamente
-        # (Python no libera al OS por sí solo hasta el siguiente GC automático)
         gc.collect()
-        time.sleep(300)
+        elapsed = time.monotonic() - t_start
+        sleep_time = max(0, 300 - elapsed)
+        time.sleep(sleep_time)
 
 
 # ── ROUTES ─────────────────────────────────────────────────────────────────────
