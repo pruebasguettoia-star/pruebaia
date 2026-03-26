@@ -314,6 +314,7 @@
   .sig-neutral      { color: var(--muted); border: 1px solid var(--border2); }
   .sig-caution      { background: #3d1010; color: #e08080; border: 1px solid #5c1a1a; }
   .sig-strong-avoid { background: #5c1a1a; color: #ff9090; border: 1px solid #9e2a2a; }
+  .sig-cooldown { background: #1a1a2e; color: #7c6aaa; border: 1px solid #3a2a5a; font-size: 9px; }
 
   /* ── INVESTMENT SCORE ── */
   td.score-col { text-align:center; min-width:52px; font-size:11px; font-weight:700; font-family:var(--font-mono); border-radius:4px; cursor:help; position:relative; }
@@ -1319,7 +1320,10 @@
           }</td>
           ${bar52(r.pos52)}
           <td class="spark-col"><canvas class="spark" width="80" height="28" data-points="${(r.sparkline||[]).join(',')}"></canvas></td>
-          ${signalCell(r.signal)}
+          ${cooldownData[r.ticker]
+            ? `<td class="signal-col sig-cooldown" title="En cooldown — no comprará hasta que pasen ${cooldownData[r.ticker]}h más">⏸ Cooldown ${cooldownData[r.ticker]}h</td>`
+            : signalCell(r.signal)
+          }
           ${scoreCell(r.inv_score, r.inv_score_breakdown)}
           ${rsiCellDiv(r.rsi, r.rsi_divergence)}
           ${trendCell(r.trend)}
@@ -2053,11 +2057,17 @@
   let nextRefreshAt = Date.now() + 300_000;
   let isRefreshing  = false;
 
+  let cooldownData = {};  // {ticker: hours_left}
+
   async function pullData(force = false) {
     try {
       const res  = await fetch("/api/data");
       const json = await res.json();
-      if (json.data) { render(json.data, json.last_updated, force); return true; }
+      if (json.data) {
+        cooldownData = json.cooldowns || {};
+        render(json.data, json.last_updated, force);
+        return true;
+      }
     } catch(e) { console.error("pullData:", e); }
     return false;
   }
