@@ -324,14 +324,16 @@ function loadData(){
         } else {
           trailingHtml='<span class="trailing-badge trailing-off">— espera</span>';
         }
+        // Currency symbol
+        var sym = p.currency === 'USD' ? '$' : '€';
         // Peak price
         var peakHtml=p.peak_price&&p.peak_price>p.entry_price
-          ?'<span style="color:#a78bfa">€'+p.peak_price+'</span>'
-          :'<span class="muted">€'+(p.peak_price||p.entry_price)+'</span>';
+          ?'<span style="color:#a78bfa">'+sym+p.peak_price+'</span>'
+          :'<span class="muted">'+sym+(p.peak_price||p.entry_price)+'</span>';
         return'<tr>'+
           '<td>'+p.name+' <span class="muted" style="font-size:9px">'+p.ticker+'</span></td>'+
           '<td>'+scorePill(p.entry_score)+'</td>'+
-          '<td>€'+p.entry_price+'</td>'+
+          '<td>'+sym+p.entry_price+'</td>'+
           '<td>'+peakHtml+'</td>'+
           '<td>€'+p.current_price+'</td>'+
           '<td class="'+cc(p.ret_pct)+'">'+fmt(p.ret_pct)+'</td>'+
@@ -349,9 +351,10 @@ function loadData(){
     } else {
       cb.innerHTML=d.closed.map(function(t){
         var cls=cc(t.ret_pct);
+        var sym=t.currency==='USD'?'$':'€';
         var peakHtml=t.peak_price&&t.peak_price>t.entry_price
-          ?'<span style="color:#a78bfa">€'+t.peak_price+'</span>'
-          :'<span class="muted">€'+(t.peak_price||t.entry_price)+'</span>';
+          ?'<span style="color:#a78bfa">'+sym+t.peak_price+'</span>'
+          :'<span class="muted">'+sym+(t.peak_price||t.entry_price)+'</span>';
         var reasonCol=t.reason&&(t.reason.indexOf('Stop')===0||t.reason.indexOf('Trailing')===0)?'#e05252'
           :t.reason&&t.reason.indexOf('trailing')>=0?'#a78bfa':'var(--muted)';
         return'<tr>'+
@@ -359,11 +362,11 @@ function loadData(){
           '<td>'+scorePill(t.entry_score)+'</td>'+
           '<td class="muted">'+t.entry_date+'</td>'+
           '<td class="muted">'+t.exit_date+'</td>'+
-          '<td>€'+t.entry_price+'</td>'+
+          '<td>'+sym+t.entry_price+'</td>'+
           '<td>'+peakHtml+'</td>'+
-          '<td>€'+t.exit_price+'</td>'+
+          '<td>'+sym+t.exit_price+'</td>'+
           '<td class="'+cls+'">'+fmt(t.ret_pct)+'</td>'+
-          '<td class="'+cls+'">'+(t.pnl>=0?"+":"")+'€'+t.pnl.toFixed(0)+'</td>'+
+          '<td class="'+cls+'">'+(t.pnl>=0?"+":"")+sym+Math.abs(t.pnl).toFixed(0)+'</td>'+
           '<td class="muted" style="font-size:10px;color:'+reasonCol+'">'+t.reason+'</td>'+
         '</tr>';
       }).join("");
