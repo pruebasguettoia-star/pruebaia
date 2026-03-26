@@ -46,7 +46,7 @@ def _alpaca_url():    return os.environ.get("ALPACA_BASE_URL", "https://paper-ap
 # Tickers de paper2 que Alpaca puede ejecutar (cotizados en NYSE/NASDAQ en USD)
 ALPACA_TRADEABLE = {
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",           # MAG7
-    "AMD","BAC","COIN","JPM","NFLX",                              # US Stocks
+    "AMD","BAC","COIN","JPM","NFLX","PLTR",                      # US Stocks
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",  # US Sectors
     "TLT","SHY","AGG","HYG","TIP",                               # Bonds
     "URTH","EEM","IWM","RSP","SPY","QQQ",                        # Major indices ETFs
@@ -194,6 +194,7 @@ GROUPS = {
         ("Coinbase",        "COIN"),
         ("JPMorgan",        "JPM"),
         ("Netflix",         "NFLX"),
+        ("Palantir",        "PLTR"),
     ],
     "US SECTORS": [
         ("Technology",        "XLK"),
@@ -291,7 +292,7 @@ USD_TICKERS = {
     # MAG 7
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
     # US Stocks
-    "AMD","BAC","COIN","JPM","NFLX",
+    "AMD","BAC","COIN","JPM","NFLX","PLTR",
     # US Sectors
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
     # Bonds (ETFs USD)
@@ -1030,7 +1031,19 @@ def run_paper2_trading(market_data):
 
             entry_dt      = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
             hours_held    = (now_dt - entry_dt).total_seconds() / 3600
-            current_price = row["price"] if row else pos.get("current_price", pos["entry_price"])
+
+            # ── Precio actual en moneda nativa de la posición ─────────────────
+            currency = pos.get("currency", "EUR")
+            fx = get_eurusd()
+            if row:
+                eur_price = row["price"]
+                if currency == "USD" and fx > 0:
+                    current_price = round(eur_price / fx, 4)
+                else:
+                    current_price = eur_price
+            else:
+                current_price = pos.get("current_price", pos["entry_price"])
+
             ret_pct       = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
             current_score = row.get("inv_score") if row else None
 
@@ -1150,15 +1163,29 @@ def run_paper2_trading(market_data):
                 position_size = pt["capital"] * PAPER2_POSITION_PCT
                 if position_size < 1:
                     continue
-                shares = position_size / row["price"]
+
+                # ── Precio nativo del broker ──────────────────────────────────
+                # Para tickers de Alpaca: usar precio en USD (antes de convertir a EUR)
+                # Para otros (XTB europeos): usar precio en EUR tal como viene
+                fx = get_eurusd()  # factor: 1 EUR = fx USD → 1 USD = 1/fx EUR
+                if ticker in ALPACA_TRADEABLE and fx > 0:
+                    # row["price"] está en EUR → revertir a USD
+                    native_price = round(row["price"] / fx, 4)
+                    currency     = "USD"
+                else:
+                    native_price = row["price"]
+                    currency     = "EUR"
+
+                shares = position_size / row["price"]  # shares calculadas en EUR (capital en EUR)
                 pt["capital"] -= position_size
                 pt["open"].append({
                     "ticker":          ticker,
                     "name":            row["name"],
                     "entry_date":      now_str,
-                    "entry_price":     round(row["price"], 2),
-                    "current_price":   round(row["price"], 2),
-                    "peak_price":      round(row["price"], 2),
+                    "entry_price":     native_price,
+                    "current_price":   native_price,
+                    "peak_price":      native_price,
+                    "currency":        currency,
                     "shares":          round(shares, 6),
                     "ret_pct":         0.0,
                     "trailing_drop":   0.0,
@@ -1171,14 +1198,13 @@ def run_paper2_trading(market_data):
                 })
                 open_tickers.add(ticker)
                 # ── Enviar orden de compra a Alpaca ───────────────────────────
-                # Convertir posición EUR → USD para la orden de Alpaca
-                fx = get_eurusd()  # factor EUR/USD actual
-                notional_usd = position_size / fx if fx > 0 else position_size
-                threading.Thread(
-                    target=alpaca_place_order,
-                    args=(ticker, "buy", notional_usd),
-                    daemon=True
-                ).start()
+                if ticker in ALPACA_TRADEABLE:
+                    notional_usd = position_size / fx if fx > 0 else position_size
+                    threading.Thread(
+                        target=alpaca_place_order,
+                        args=(ticker, "buy", notional_usd),
+                        daemon=True
+                    ).start()
                 changed = True
 
         # ── Log equity ────────────────────────────────────────────────────────
