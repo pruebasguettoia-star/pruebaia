@@ -935,7 +935,7 @@ def is_market_hours():
 # ══════════════════════════════════════════════════════════════════════════════
 # ── PAPER TRADING 2 — Score ≥ 85, trailing stop ──────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
-PAPER2_FILE         = os.path.join(os.path.dirname(__file__), "paper2_trades.json")
+PAPER2_FILE         = os.path.join(os.environ.get("PAPER_DATA_DIR", os.path.dirname(__file__)), "paper2_trades.json")
 PAPER2_INITIAL_CAP  = 10000.0
 PAPER2_POSITION_PCT = 0.10   # 10% of capital per trade
 PAPER2_MIN_SCORE    = 85     # minimum inv_score to open a position
@@ -1375,7 +1375,6 @@ def api_data():
     if not data:
         return jsonify({"error": "no data yet"}), 503
     # Reconstruir inv_score_breakdown como string sólo en el momento de enviar
-    # (en cache se guarda como dict compacto para ahorrar RAM)
     import copy
     out = {}
     for group, rows in data.items():
@@ -1386,7 +1385,22 @@ def api_data():
             if isinstance(bd, dict):
                 r["inv_score_breakdown"] = _breakdown_to_str(bd)
             out[group].append(r)
-    resp = jsonify({"data": out, "last_updated": last_updated})
+
+    # ── Añadir info de cooldowns del paper2 ──────────────────────────────────
+    cooldowns = {}
+    try:
+        pt = _paper2_mem
+        if pt and pt.get("cooldowns"):
+            now_dt = datetime.now()
+            for ticker, until_str in pt["cooldowns"].items():
+                until_dt = datetime.strptime(until_str, "%Y-%m-%d %H:%M")
+                hours_left = (until_dt - now_dt).total_seconds() / 3600
+                if hours_left > 0:
+                    cooldowns[ticker] = round(hours_left, 1)
+    except Exception:
+        pass
+
+    resp = jsonify({"data": out, "last_updated": last_updated, "cooldowns": cooldowns})
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
