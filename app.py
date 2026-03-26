@@ -83,19 +83,20 @@ def alpaca_place_order(ticker, side, notional_usd):
             "time_in_force": "day",
         }
         if side == "buy":
+            # Verificar que no hay posición abierta ya en Alpaca — evita duplicados
+            existing_qty = alpaca_get_position_qty(ticker)
+            if existing_qty is not None and float(existing_qty) > 0:
+                print(f"[alpaca] {ticker} ya tiene posición abierta en Alpaca ({existing_qty} shares) — omitiendo compra duplicada")
+                return None
             # Orden por importe en USD (fractional shares)
             payload["notional"] = str(round(notional_usd, 2))
         else:
-            # Venta: liquidar posición completa
-            payload["qty"] = None  # se sobreescribe abajo con la qty real
-        # Para ventas, primero obtenemos la posición actual en Alpaca
-        if side == "sell":
+            # Para ventas, primero obtenemos la posición actual en Alpaca
             pos_qty = alpaca_get_position_qty(ticker)
             if pos_qty is None or float(pos_qty) <= 0:
                 print(f"[alpaca] no hay posición abierta en Alpaca para {ticker}")
                 return None
             payload["qty"] = pos_qty
-            payload.pop("notional", None)
 
         data = json.dumps(payload).encode()
         req  = urllib.request.Request(
@@ -1177,6 +1178,7 @@ def run_paper2_trading(market_data):
                     currency     = "EUR"
 
                 shares = position_size / row["price"]  # shares calculadas en EUR (capital en EUR)
+                notional_usd = position_size / fx if fx > 0 else position_size  # para Alpaca
                 pt["capital"] -= position_size
                 pt["open"].append({
                     "ticker":          ticker,
@@ -1197,9 +1199,8 @@ def run_paper2_trading(market_data):
                     "waiting_recovery": False,
                 })
                 open_tickers.add(ticker)
-                # ── Enviar orden de compra a Alpaca ───────────────────────────
-                if ticker in ALPACA_TRADEABLE:
-                    notional_usd = position_size / fx if fx > 0 else position_size
+                # ── Enviar orden de compra a Alpaca (independiente del paper2) ─
+                if ticker in ALPACA_TRADEABLE and _alpaca_enabled():
                     threading.Thread(
                         target=alpaca_place_order,
                         args=(ticker, "buy", notional_usd),
@@ -1281,7 +1282,21 @@ def api_paper2_sell():
         pnl     = pos["shares"] * (current_price - pos["entry_price"])
         pt["capital"] += pos["shares"] * current_price
         pt["open"] = [p for p in pt["open"] if p["ticker"] != ticker]
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now_dt  = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M")
+
+        # Precio en moneda nativa de la posición
+        currency = pos.get("currency", "EUR")
+        fx = get_eurusd()
+        if currency == "USD" and fx > 0:
+            current_price = round((row["price"] if row else pos["entry_price"]) / fx, 4)
+        else:
+            current_price = row["price"] if row else pos["entry_price"]
+
+        ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+        pnl     = pos["shares"] * (current_price - pos["entry_price"])
+        pt["capital"] += pos["shares"] * (row["price"] if row else pos["entry_price"])
+        pt["open"] = [p for p in pt["open"] if p["ticker"] != ticker]
         pt["closed"].append({
             "ticker":       ticker,
             "name":         pos["name"],
@@ -1289,15 +1304,28 @@ def api_paper2_sell():
             "exit_date":    now_str,
             "entry_price":  pos["entry_price"],
             "exit_price":   round(current_price, 2),
+            "peak_price":   round(pos.get("peak_price", pos["entry_price"]), 2),
+            "currency":     currency,
             "shares":       pos["shares"],
             "ret_pct":      round(ret_pct, 2),
             "pnl":          round(pnl, 2),
-            "reason":       reason,
+            "reason":       "Venta manual",
             "entry_score":  pos.get("entry_score", "—"),
             "hours_held":   pos.get("hours_held", "—"),
+            "trailing_active": pos.get("trailing_active", False),
         })
+        # ── Cooldown 48h tras venta manual ────────────────────────────────────
+        if "cooldowns" not in pt:
+            pt["cooldowns"] = {}
+        pt["cooldowns"][ticker] = (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M")
         save_paper2(pt)
-    return jsonify({"status": "sold"})
+        # ── Enviar orden de venta a Alpaca ────────────────────────────────────
+        threading.Thread(
+            target=alpaca_place_order,
+            args=(ticker, "sell", 0),
+            daemon=True
+        ).start()
+    return jsonify({"status": "sold", "cooldown_hours": 48})
 
 
 @app.route("/api/refresh", methods=["POST"])
