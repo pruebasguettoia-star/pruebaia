@@ -678,6 +678,38 @@ def fetch_ticker(name, ticker):
         else:
             sc_ret1m = 3; sc_ret1m_note = "Retorno 1M sin datos (+3)"
 
+        # ── Filtros de calidad (penalización, máx −15 pts) ───────────────
+        # Evitan abrir posiciones en "value traps": tickers que caen por
+        # deterioro fundamental, no por corrección técnica sana.
+        sc_quality = 0
+        sc_quality_note = ""
+        quality_flags = []
+
+        # A) Momentum corto: si ret_1w < -12% → caída libre, no es oversold sano
+        ret_1w_val = pct(price, week_ago)
+        if ret_1w_val is not None and ret_1w_val <= -12:
+            sc_quality -= 8
+            quality_flags.append(f"Caída 1W {ret_1w_val:.1f}% — cuchillo cayendo (−8)")
+        elif ret_1w_val is not None and ret_1w_val <= -8:
+            sc_quality -= 4
+            quality_flags.append(f"Caída 1W {ret_1w_val:.1f}% — momentum muy negativo (−4)")
+
+        # B) Volumen seco: vol_rel < 0.5 → nadie está comprando, la caída no atrae interés
+        if vol_rel is not None and vol_rel < 0.5:
+            sc_quality -= 5
+            quality_flags.append(f"Volumen {vol_rel:.1f}× — sin interés comprador (−5)")
+
+        # C) Posición en rango 52s: si está en el 10% inferior del rango Y bearish → doble castigo
+        if pos52 is not None and pos52 <= 10 and trend == "bearish":
+            sc_quality -= 5
+            quality_flags.append(f"Mínimos 52s ({pos52}%) + tendencia bajista (−5)")
+
+        sc_quality = max(-15, sc_quality)  # cap de penalización
+        if quality_flags:
+            sc_quality_note = " | ".join(quality_flags)
+        else:
+            sc_quality_note = "Sin señales de trampa de valor (0)"
+
         # ── Fundamentales OPCIONALES (±10 pts) ──────────────────────────────
         # Solo suman si son buenos, solo penalizan si son malos.
         # Sin datos = 0 (no penaliza ni premia).
@@ -709,21 +741,22 @@ def fetch_ticker(name, ticker):
             sc_div_bonus =  0; sc_div_note = "Sin divergencia RSI (0)"
 
         # ── Total ────────────────────────────────────────────────────────────
-        # Técnicos (máx 90) + fundamentales (±10) + divergencia (±8) → clamp 1-100
-        inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus
+        # Técnicos (máx 90) + fundamentales (±10) + divergencia (±8) + calidad (−15..0) → clamp 1-100
+        inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality
         inv_score = max(1, min(100, inv_score_raw))
 
         inv_score_breakdown = {
-            "signal": signal,
-            "rsi":    sc_rsi_note,
-            "bb":     sc_bb_note,
-            "trend":  sc_trend_note,
-            "vol":    sc_vol_note,
-            "ret1m":  sc_ret1m_note,
-            "pe":     sc_pe_note,
-            "dy":     sc_dy_note,
-            "div":    sc_div_note,
-            "total":  inv_score,
+            "signal":  signal,
+            "rsi":     sc_rsi_note,
+            "bb":      sc_bb_note,
+            "trend":   sc_trend_note,
+            "vol":     sc_vol_note,
+            "ret1m":   sc_ret1m_note,
+            "quality": sc_quality_note,
+            "pe":      sc_pe_note,
+            "dy":      sc_dy_note,
+            "div":     sc_div_note,
+            "total":   inv_score,
         }
 
         # ── Sparkline (30 days of closes, normalised 0-100) ──────────────────
@@ -930,6 +963,38 @@ def is_market_hours():
     # Euronext/Xetra: 08:00–16:30 UTC
     eu_open = (8 * 60 <= t <= 16 * 60 + 30)
     return us_open or eu_open
+
+# ── Per-ticker market hours ───────────────────────────────────────────────────
+# Tickers europeos: índices (.L, ^FCHI, ^GDAXI, ^AEX, ^IBEX, ^SSMI) + ISF.L
+_EU_TICKERS = {
+    "ISF.L", "^FCHI", "^GDAXI", "^AEX", "^IBEX", "^SSMI",
+}
+# Commodities/Forex: futuros y pares de divisas — mercado ~24h entre semana
+_FUTURES_TICKERS = {
+    "BZ=F", "CL=F", "NG=F", "ZW=F",
+    "EURUSD=X", "JPY=X", "GBPUSD=X", "CHF=X", "CNY=X",
+}
+
+def is_market_open(ticker):
+    """Devuelve True si el mercado del ticker específico está abierto.
+    Más preciso que is_market_hours() para evitar operar con precios stale."""
+    now_utc = datetime.utcnow()
+    dow = now_utc.weekday()
+    if dow >= 5:
+        return False
+    t = now_utc.hour * 60 + now_utc.minute
+
+    if ticker in _FUTURES_TICKERS:
+        # Futuros CME: domingo 18:00 ET → viernes 17:00 ET ≈ ~24h L-V
+        # Simplificado: abierto L-V cualquier hora
+        return True
+
+    if ticker in _EU_TICKERS:
+        # Euronext/Xetra: 08:00–16:30 UTC
+        return 8 * 60 <= t <= 16 * 60 + 30
+
+    # Todo lo demás: NYSE/NASDAQ ETFs y acciones US — 13:30–20:00 UTC
+    return 13 * 60 + 30 <= t <= 20 * 60
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1148,65 +1213,65 @@ def run_paper2_trading(market_data):
 
         pt["open"] = still_open
 
-        # ── Check entries: score ≥ 85 + mercado abierto ──────────────────────
+        # ── Check entries: score ≥ 85 + mercado abierto por ticker ────────────
         open_tickers = {p["ticker"] for p in pt["open"]}
-        if not is_market_hours():
-            print("[paper2] fuera de horario — no se abren posiciones nuevas")
-        else:
-            for ticker, row in ticker_map.items():
-                if ticker in pt["cooldowns"]:
-                    continue
-                score = row.get("inv_score")
-                if score is None or score < PAPER2_MIN_SCORE:
-                    continue
-                if ticker in open_tickers:
-                    continue
-                position_size = pt["capital"] * PAPER2_POSITION_PCT
-                if position_size < 1:
-                    continue
+        for ticker, row in ticker_map.items():
+            if ticker in pt["cooldowns"]:
+                continue
+            score = row.get("inv_score")
+            if score is None or score < PAPER2_MIN_SCORE:
+                continue
+            if ticker in open_tickers:
+                continue
+            # ── Verificar que el mercado de ESTE ticker está abierto ───────
+            if not is_market_open(ticker):
+                continue
+            position_size = pt["capital"] * PAPER2_POSITION_PCT
+            if position_size < 1:
+                continue
 
-                # ── Precio nativo del broker ──────────────────────────────────
-                # Para tickers de Alpaca: usar precio en USD (antes de convertir a EUR)
-                # Para otros (XTB europeos): usar precio en EUR tal como viene
-                fx = get_eurusd()  # factor: 1 EUR = fx USD → 1 USD = 1/fx EUR
-                if ticker in ALPACA_TRADEABLE and fx > 0:
-                    # row["price"] está en EUR → revertir a USD
-                    native_price = round(row["price"] / fx, 4)
-                    currency     = "USD"
-                else:
-                    native_price = row["price"]
-                    currency     = "EUR"
+            # ── Precio nativo del broker ──────────────────────────────────
+            # Para tickers de Alpaca: usar precio en USD (antes de convertir a EUR)
+            # Para otros (XTB europeos): usar precio en EUR tal como viene
+            fx = get_eurusd()  # factor: 1 EUR = fx USD → 1 USD = 1/fx EUR
+            if ticker in ALPACA_TRADEABLE and fx > 0:
+                # row["price"] está en EUR → revertir a USD
+                native_price = round(row["price"] / fx, 4)
+                currency     = "USD"
+            else:
+                native_price = row["price"]
+                currency     = "EUR"
 
-                shares = position_size / row["price"]  # shares calculadas en EUR (capital en EUR)
-                notional_usd = position_size / fx if fx > 0 else position_size  # para Alpaca
-                pt["capital"] -= position_size
-                pt["open"].append({
-                    "ticker":          ticker,
-                    "name":            row["name"],
-                    "entry_date":      now_str,
-                    "entry_price":     native_price,
-                    "current_price":   native_price,
-                    "peak_price":      native_price,
-                    "currency":        currency,
-                    "shares":          round(shares, 6),
-                    "ret_pct":         0.0,
-                    "trailing_drop":   0.0,
-                    "trailing_active": False,
-                    "hours_held":      0.0,
-                    "hours_left":      float(PAPER2_HOLD_HOURS),
-                    "entry_score":     score,
-                    "score":           score,
-                    "waiting_recovery": False,
-                })
-                open_tickers.add(ticker)
-                # ── Enviar orden de compra a Alpaca (independiente del paper2) ─
-                if ticker in ALPACA_TRADEABLE and _alpaca_enabled():
-                    threading.Thread(
-                        target=alpaca_place_order,
-                        args=(ticker, "buy", notional_usd),
-                        daemon=True
-                    ).start()
-                changed = True
+            shares = position_size / row["price"]  # shares calculadas en EUR (capital en EUR)
+            notional_usd = position_size / fx if fx > 0 else position_size  # para Alpaca
+            pt["capital"] -= position_size
+            pt["open"].append({
+                "ticker":          ticker,
+                "name":            row["name"],
+                "entry_date":      now_str,
+                "entry_price":     native_price,
+                "current_price":   native_price,
+                "peak_price":      native_price,
+                "currency":        currency,
+                "shares":          round(shares, 6),
+                "ret_pct":         0.0,
+                "trailing_drop":   0.0,
+                "trailing_active": False,
+                "hours_held":      0.0,
+                "hours_left":      float(PAPER2_HOLD_HOURS),
+                "entry_score":     score,
+                "score":           score,
+                "waiting_recovery": False,
+            })
+            open_tickers.add(ticker)
+            # ── Enviar orden de compra a Alpaca (independiente del paper2) ─
+            if ticker in ALPACA_TRADEABLE and _alpaca_enabled():
+                threading.Thread(
+                    target=alpaca_place_order,
+                    args=(ticker, "buy", notional_usd),
+                    daemon=True
+                ).start()
+            changed = True
 
         # ── Log equity ────────────────────────────────────────────────────────
         open_value = sum(
@@ -1398,7 +1463,7 @@ def _breakdown_to_str(bd):
     label = "★ COMPRA FUERTE" if sig == "strong_buy" else sig.upper()
     sep = "─────────────────────"
     lines = [label, sep]
-    for k in ("rsi", "bb", "trend", "vol", "ret1m", "pe", "dy", "div"):
+    for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "pe", "dy", "div"):
         v = bd.get(k, "")
         if v:
             lines.append(v)
