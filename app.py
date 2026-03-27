@@ -1228,11 +1228,53 @@ def paper2():
 
 @app.route("/api/paper2")
 def api_paper2():
+    """READ-ONLY: devuelve el estado actual del paper trading sin ejecutar lógica.
+    Las decisiones de trading solo las toma background_refresh cada 5 min."""
     with lock:
         market_data = cache.get("data") or {}
     if not market_data:
         return jsonify({"error": "no data yet"})
-    pt, ticker_map = run_paper2_trading(market_data)
+
+    # Construir ticker_map para calcular valor actual de posiciones abiertas
+    ticker_map = {}
+    for group_rows in market_data.values():
+        for row in group_rows:
+            ticker_map[row["ticker"]] = row
+
+    with paper2_lock:
+        pt = load_paper2()
+
+        # Actualizar solo datos de visualización (precio actual, ret_pct, horas)
+        # SIN tomar decisiones de entrada/salida
+        now_dt = datetime.now()
+        for pos in pt["open"]:
+            ticker = pos["ticker"]
+            row = ticker_map.get(ticker)
+            if not row:
+                continue
+            entry_dt   = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
+            hours_held = (now_dt - entry_dt).total_seconds() / 3600
+
+            # Precio en moneda nativa
+            currency = pos.get("currency", "EUR")
+            fx = get_eurusd()
+            if currency == "USD" and fx > 0:
+                current_price = round(row["price"] / fx, 4)
+            else:
+                current_price = row["price"]
+
+            ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
+            peak_price = pos.get("peak_price", pos["entry_price"])
+            trailing_drop = (current_price - peak_price) / peak_price * 100 if peak_price > 0 else 0
+
+            pos["current_price"]    = round(current_price, 2)
+            pos["ret_pct"]          = round(ret_pct, 2)
+            pos["hours_held"]       = round(hours_held, 1)
+            pos["hours_left"]       = round(max(0, PAPER2_HOLD_HOURS - hours_held), 1)
+            pos["score"]            = row.get("inv_score")
+            pos["trailing_drop"]    = round(trailing_drop, 2)
+            pos["waiting_recovery"] = (hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0
+                                       and hours_held < 48.0)
 
     open_value   = sum(p["shares"] * ticker_map.get(p["ticker"], {}).get("price", p["entry_price"]) for p in pt["open"])
     total_equity = round(pt["capital"] + open_value, 2)
@@ -1277,15 +1319,10 @@ def api_paper2_sell():
         if not pos:
             return jsonify({"error": "position not found"}), 404
         row = ticker_map.get(ticker)
-        current_price = row["price"] if row else pos["entry_price"]
-        ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
-        pnl     = pos["shares"] * (current_price - pos["entry_price"])
-        pt["capital"] += pos["shares"] * current_price
-        pt["open"] = [p for p in pt["open"] if p["ticker"] != ticker]
         now_dt  = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%d %H:%M")
 
-        # Precio en moneda nativa de la posición
+        # Precio en moneda nativa de la posición (USD o EUR)
         currency = pos.get("currency", "EUR")
         fx = get_eurusd()
         if currency == "USD" and fx > 0:
@@ -1295,7 +1332,9 @@ def api_paper2_sell():
 
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
         pnl     = pos["shares"] * (current_price - pos["entry_price"])
-        pt["capital"] += pos["shares"] * (row["price"] if row else pos["entry_price"])
+        # Devolver valor de la posición al capital (en EUR — moneda del portfolio)
+        eur_price = row["price"] if row else pos["entry_price"]
+        pt["capital"] += pos["shares"] * eur_price
         pt["open"] = [p for p in pt["open"] if p["ticker"] != ticker]
         pt["closed"].append({
             "ticker":       ticker,
