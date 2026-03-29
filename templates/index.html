@@ -1168,6 +1168,114 @@
       color: var(--muted);
       margin-bottom: 1px;
     }
+
+    /* ── Expandable detail panel ── */
+    .cv-expand-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 8px;
+      padding: 4px 0;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--muted);
+      border-top: 1px solid var(--border2);
+      gap: 4px;
+      transition: color 0.2s;
+    }
+    .cv-expand-btn .cv-chevron {
+      transition: transform 0.25s ease;
+      font-size: 10px;
+    }
+    .cv-card.expanded .cv-expand-btn .cv-chevron { transform: rotate(180deg); }
+    .cv-card.expanded .cv-expand-btn { color: var(--accent); }
+
+    .cv-detail {
+      display: none;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border2);
+      animation: cvSlideDown 0.2s ease;
+    }
+    .cv-card.expanded .cv-detail { display: block; }
+    @keyframes cvSlideDown {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .cv-detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .cv-detail-item {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .cv-detail-label {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .cv-detail-value {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: #e8ecf2;
+    }
+
+    .cv-detail-section {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 8px 0 4px;
+    }
+
+    .cv-ret-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+    }
+    .cv-ret-cell {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 5px 6px;
+      border-radius: 5px;
+      text-align: center;
+    }
+    .cv-ret-cell-label {
+      font-size: 7.5px;
+      font-weight: 400;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 1px;
+    }
+
+    .cv-chart-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 10px;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      background: rgba(74,158,255,0.06);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .cv-chart-btn:active { background: rgba(74,158,255,0.15); }
   }
 
   /* ── PAPER CHIP (header) ── */
@@ -1614,8 +1722,19 @@
         const trendCls = r.trend === "bullish" ? "trend-up" : r.trend === "bearish" ? "trend-dn" : "";
         const trendLabel = r.trend === "bullish" ? "▲ Bull" : r.trend === "bearish" ? "▼ Bear" : "—";
 
-        html += `<div class="cv-card" onclick="openChart('${r.ticker}','${r.name}')">
-          <div class="cv-row1">
+        // Detail values
+        const volColor = r.vol_rel != null ? (r.vol_rel >= 1.5 ? "color:#4ade80" : r.vol_rel < 0.5 ? "color:#fca5a5" : "") : "";
+        const peColor = r.pe_ratio != null ? (r.pe_ratio < 15 ? "color:#4ade80" : r.pe_ratio > 30 ? "color:#fca5a5" : "") : "";
+        const betaColor = r.beta != null ? (r.beta > 1.5 ? "color:#fca5a5" : r.beta < 0.5 ? "color:#4ade80" : "") : "";
+        const prob30Color = r.prob_up_30d != null ? (r.prob_up_30d >= 60 ? "color:#4ade80" : r.prob_up_30d < 45 ? "color:#fca5a5" : "") : "";
+
+        function retCellCard(label, v) {
+          const cls = heatClass(v);
+          return `<div class="cv-ret-cell ${cls}"><span class="cv-ret-cell-label">${label}</span>${fmt(v)}</div>`;
+        }
+
+        html += `<div class="cv-card" data-ticker="${r.ticker}">
+          <div class="cv-row1" onclick="toggleCard(this.parentElement, event)">
             <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:4px">
               <span class="cv-name">${r.name}</span>
               <span class="cv-ticker">${r.ticker}</span>
@@ -1623,26 +1742,117 @@
             <span class="cv-price">${r.currency === "EUR" ? "€" : ""}${fmtPrice(r.price)}</span>
             <span class="cv-ret1d" style="${retBg(r.ret_1d)}">${fmt(r.ret_1d)}</span>
           </div>
-          <div class="cv-row2">
+          <div class="cv-row2" onclick="toggleCard(this.parentElement, event)">
             <span class="cv-pill ${sig.cls}">${sig.label}</span>
             <span class="cv-score" style="${scoreBg(r.inv_score)}">${r.inv_score ?? '—'}</span>
             <span class="cv-indicator ${rsiCls}">RSI ${r.rsi != null ? r.rsi.toFixed(0) : '—'}</span>
             <span class="cv-indicator ${trendCls}">${trendLabel}</span>
             ${r.bb_pct != null ? `<span class="cv-indicator">BB ${r.bb_pct.toFixed(0)}%</span>` : ''}
           </div>
-          <div class="cv-row3">
-            ${miniRet('1H', r.ret_1h)}
-            ${miniRet('1D', r.ret_1d)}
-            ${miniRet('1W', r.ret_1w)}
-            ${miniRet('1M', r.ret_1m)}
-            ${miniRet('YTD', r.ret_ytd)}
-            ${miniRet('1Y', r.ret_1y)}
+
+          <div class="cv-expand-btn" onclick="toggleCard(this.parentElement, event)">
+            <span>Ver detalle</span>
+            <span class="cv-chevron">▼</span>
+          </div>
+
+          <div class="cv-detail">
+            <div class="cv-detail-section">Indicadores técnicos</div>
+            <div class="cv-detail-grid">
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">RSI (14)</span>
+                <span class="cv-detail-value" style="${r.rsi != null && r.rsi <= 30 ? 'color:#4ade80' : r.rsi != null && r.rsi >= 70 ? 'color:#fca5a5' : ''}">${r.rsi != null ? r.rsi.toFixed(1) : '—'}${r.rsi_divergence === 'bullish' ? ' ↗' : r.rsi_divergence === 'bearish' ? ' ↘' : ''}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">BB%</span>
+                <span class="cv-detail-value" style="${r.bb_pct != null && r.bb_pct <= 20 ? 'color:#4ade80' : r.bb_pct != null && r.bb_pct >= 80 ? 'color:#fca5a5' : ''}">${r.bb_pct != null ? r.bb_pct.toFixed(0) + '%' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Tendencia</span>
+                <span class="cv-detail-value" style="${r.trend === 'bullish' ? 'color:#34b566' : r.trend === 'bearish' ? 'color:#c43030' : ''}">${r.trend === 'bullish' ? '▲ Alcista' : r.trend === 'bearish' ? '▼ Bajista' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">52W Pos.</span>
+                <span class="cv-detail-value">${r.pos52 != null ? r.pos52 + '%' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Volumen</span>
+                <span class="cv-detail-value" style="${volColor}">${r.vol_rel != null ? r.vol_rel.toFixed(1) + '×' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Rango 1H</span>
+                <span class="cv-detail-value" style="font-size:10px">${r.range_up && r.range_dn ? '<span style="color:#34b566">' + r.range_up + '</span> / <span style="color:#c43030">' + r.range_dn + '</span>' : '—'}</span>
+              </div>
+            </div>
+
+            <div class="cv-detail-section">Fundamentales</div>
+            <div class="cv-detail-grid">
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">P/E</span>
+                <span class="cv-detail-value" style="${peColor}">${r.pe_ratio ?? '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Dividendo</span>
+                <span class="cv-detail-value">${r.div_yield != null ? r.div_yield.toFixed(2) + '%' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Beta</span>
+                <span class="cv-detail-value" style="${betaColor}">${r.beta != null ? r.beta.toFixed(2) : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">P↑ 30d</span>
+                <span class="cv-detail-value" style="${prob30Color}">${r.prob_up_30d != null ? r.prob_up_30d.toFixed(1) + '%' : '—'}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Señal</span>
+                <span class="cv-detail-value" style="font-size:10px">${sig.label}</span>
+              </div>
+              <div class="cv-detail-item">
+                <span class="cv-detail-label">Score</span>
+                <span class="cv-detail-value">${r.inv_score ?? '—'}/100</span>
+              </div>
+            </div>
+
+            <div class="cv-detail-section">Retornos</div>
+            <div class="cv-ret-grid">
+              ${retCellCard('15M', r.ret_15m)}
+              ${retCellCard('1H', r.ret_1h)}
+              ${retCellCard('3H', r.ret_3h)}
+              ${retCellCard('1D', r.ret_1d)}
+              ${retCellCard('1W', r.ret_1w)}
+              ${retCellCard('1M', r.ret_1m)}
+              ${retCellCard('YTD', r.ret_ytd)}
+              ${retCellCard('1Y', r.ret_1y)}
+              ${retCellCard('3Y', r.ret_3y)}
+            </div>
+
+            <div class="cv-chart-btn" onclick="event.stopPropagation(); openChart('${r.ticker}','${r.name}')">
+              📈 Ver gráfico completo
+            </div>
           </div>
         </div>`;
       }
       html += `</div>`;
     }
     container.innerHTML = html;
+  }
+
+  // ── Toggle card expand (mobile) ─────────────────────────────────────────────
+  function toggleCard(card, event) {
+    event.stopPropagation();
+    const wasExpanded = card.classList.contains('expanded');
+    // Collapse all others
+    document.querySelectorAll('.cv-card.expanded').forEach(c => {
+      if (c !== card) c.classList.remove('expanded');
+    });
+    // Toggle this one
+    card.classList.toggle('expanded', !wasExpanded);
+    // Update button text
+    const btn = card.querySelector('.cv-expand-btn span:first-child');
+    if (btn) btn.textContent = !wasExpanded ? 'Ocultar detalle' : 'Ver detalle';
+    // Scroll into view if expanding
+    if (!wasExpanded) {
+      setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+    }
   }
 
   // ── Sparklines ───────────────────────────────────────────────────────────────
