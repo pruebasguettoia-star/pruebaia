@@ -14,6 +14,7 @@ from config import (
 from indicators import get_eurusd, get_trailing_pct
 import alpaca_api
 import storage
+import telegram_alerts
 
 paper2_lock = threading.Lock()
 
@@ -107,6 +108,7 @@ def run_trading(market_data):
                 if needs_cooldown:
                     storage.set_cooldown(ticker, (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
                 threading.Thread(target=alpaca_api.place_order, args=(ticker, "sell", 0), daemon=True).start()
+                threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name",""), round(ret_pct,2), round(pos["shares"]*(current_price-pos["entry_price"]),2), exit_reason, currency), daemon=True).start()
             else:
                 storage.update_open_position(ticker, {
                     "current_price": round(current_price, 2), "peak_price": round(peak_price, 4),
@@ -149,6 +151,7 @@ def run_trading(market_data):
             open_tickers.add(ticker)
             if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                 threading.Thread(target=alpaca_api.place_order, args=(ticker, "buy", notional_usd), daemon=True).start()
+            threading.Thread(target=telegram_alerts.alert_trade_open, args=(ticker, row["name"], score, native_price, currency), daemon=True).start()
 
         # Equity log
         positions = storage.get_open_positions()

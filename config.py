@@ -21,6 +21,15 @@ EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO       = os.environ.get("EMAIL_TO", "")
 EMAIL_ENABLED  = bool(EMAIL_FROM and EMAIL_PASSWORD and EMAIL_TO)
 
+# ── TELEGRAM ──────────────────────────────────────────────────────────────────
+# En Railway: TELEGRAM_BOT_TOKEN = tu_token, TELEGRAM_CHAT_ID = tu_chat_id
+# Para obtenerlos:
+#   1. Habla con @BotFather en Telegram → /newbot → copia el token
+#   2. Habla con @userinfobot → copia tu chat_id
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+
 # ── PAPER TRADING ─────────────────────────────────────────────────────────────
 PAPER_DATA_DIR      = os.environ.get("PAPER_DATA_DIR", os.path.dirname(__file__))
 PAPER2_FILE         = os.path.join(PAPER_DATA_DIR, "paper2_trades.json")

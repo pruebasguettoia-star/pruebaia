@@ -27,6 +27,7 @@ import indicators
 import paper_engine
 import alpaca_api
 import storage
+import telegram_alerts
 
 app = Flask(__name__)
 
@@ -175,6 +176,7 @@ def refresh_data():
     indicators.purge_intraday_cache()
     if strong_buys:
         threading.Thread(target=send_alert_email, args=(strong_buys,), daemon=True).start()
+        threading.Thread(target=telegram_alerts.alert_strong_buys, args=(strong_buys,), daemon=True).start()
 
 
 def background_refresh():
