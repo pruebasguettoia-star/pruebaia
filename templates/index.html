@@ -1019,6 +1019,157 @@
     .date-display { display: none; }
     .last-updated { display: none; }
   }
+  /* ── MOBILE CARD VIEW ── */
+  .card-view { display: none; }
+
+  @media (max-width: 768px) {
+    /* Hide table, show cards on mobile */
+    .table-section, #market-table, .main > table, .col-header { display: none !important; }
+    .card-view { display: block; padding: 0 12px; }
+
+    .cv-group {
+      margin-bottom: 4px;
+    }
+    .cv-group-title {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 12px 0 6px;
+      border-top: 1px solid var(--border2);
+    }
+    .cv-group:first-child .cv-group-title { border-top: none; }
+
+    .cv-card {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s, transform 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .cv-card:active { transform: scale(0.98); border-color: var(--accent); }
+
+    /* Row 1: name + price + ret1d */
+    .cv-row1 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .cv-name {
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      color: #e8ecf2;
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cv-ticker {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--accent);
+      font-weight: 500;
+      margin-left: 6px;
+      flex-shrink: 0;
+    }
+    .cv-price {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: #e8ecf2;
+      flex-shrink: 0;
+    }
+    .cv-ret1d {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      min-width: 58px;
+      text-align: center;
+    }
+
+    /* Row 2: signal + score + rsi + trend + bb */
+    .cv-row2 {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .cv-pill {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      white-space: nowrap;
+      letter-spacing: 0.3px;
+    }
+    .cv-signal-strong-buy   { background: #1a5c35; color: #5ddb8a; border: 1px solid #2a9150; }
+    .cv-signal-buy          { background: #0d3d22; color: #34b566; border: 1px solid #1a5c35; }
+    .cv-signal-watch        { background: #2a2a0a; color: #c8b84a; border: 1px solid #5a5010; }
+    .cv-signal-neutral      { color: var(--muted); border: 1px solid var(--border2); }
+    .cv-signal-caution      { background: #3d1010; color: #e08080; border: 1px solid #5c1a1a; }
+    .cv-signal-strong-avoid { background: #5c1a1a; color: #ff9090; border: 1px solid #9e2a2a; }
+    .cv-signal-cooldown     { background: #1a1a2e; color: #7c6aaa; border: 1px solid #3a2a5a; }
+
+    .cv-score {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    .cv-indicator {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      padding: 3px 6px;
+      border-radius: 5px;
+      border: 1px solid var(--border2);
+      color: var(--muted);
+    }
+    .cv-indicator.rsi-hot { border-color: rgba(158,42,42,0.5); color: #fca5a5; background: rgba(158,42,42,0.1); }
+    .cv-indicator.rsi-cold { border-color: rgba(42,145,80,0.5); color: #4ade80; background: rgba(42,145,80,0.1); }
+    .cv-indicator.trend-up { border-color: rgba(42,145,80,0.4); color: #34b566; }
+    .cv-indicator.trend-dn { border-color: rgba(158,42,42,0.4); color: #c43030; }
+
+    /* Row 3: mini returns strip */
+    .cv-row3 {
+      display: flex;
+      gap: 4px;
+      margin-top: 8px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .cv-ret-mini {
+      font-family: var(--font-mono);
+      font-size: 8.5px;
+      padding: 2px 5px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      text-align: center;
+      min-width: 38px;
+    }
+    .cv-ret-label {
+      font-size: 7px;
+      display: block;
+      color: var(--muted);
+      margin-bottom: 1px;
+    }
+  }
+
   /* ── PAPER CHIP (header) ── */
   .paper-chip {
     display: inline-flex;
@@ -1211,7 +1362,10 @@
       </tr>
     </thead>
     <tbody id="table-body"></tbody>
-  </table></div>
+  </table>
+
+  <!-- Mobile Card View (hidden on desktop) -->
+  <div id="card-view" class="card-view"></div>
 </div>
 
 <script>
@@ -1407,6 +1561,90 @@
     tbody.innerHTML = html;
   }
 
+  // ── Build mobile cards ──────────────────────────────────────────────────────
+  function buildCards(data) {
+    const container = document.getElementById("card-view");
+    if (!container) return;
+    let html = "";
+
+    const sigMap = {
+      strong_buy:   { cls: "cv-signal-strong-buy",   label: "★ COMPRA FUERTE" },
+      buy:          { cls: "cv-signal-buy",           label: "▲ Compra" },
+      watch:        { cls: "cv-signal-watch",         label: "◉ Vigilar" },
+      neutral:      { cls: "cv-signal-neutral",       label: "— Neutral" },
+      caution:      { cls: "cv-signal-caution",       label: "▼ Precaución" },
+      strong_avoid: { cls: "cv-signal-strong-avoid",  label: "✕ Evitar" },
+    };
+
+    function miniRet(label, v) {
+      const cls = heatClass(v);
+      const txt = fmt(v);
+      return `<div class="cv-ret-mini ${cls}"><span class="cv-ret-label">${label}</span>${txt}</div>`;
+    }
+
+    function retBg(v) {
+      if (v === null || v === undefined) return 'background:transparent;color:var(--muted)';
+      if (v >= 2)   return 'background:var(--green4);color:#0d2518';
+      if (v >= 0.5) return 'background:var(--green3);color:#b8e8c8';
+      if (v >= 0)   return 'background:var(--green2);color:#90c8a0';
+      if (v >= -0.5) return 'background:transparent;color:var(--muted)';
+      if (v >= -2)  return 'background:var(--red2);color:#e09090';
+      if (v >= -5)  return 'background:var(--red3);color:#ffc0c0';
+      return 'background:var(--red4);color:#ffc0c0';
+    }
+
+    function scoreBg(v) {
+      if (v == null) return '';
+      if (v >= 86) return 'background:#14532d;color:#bbf7d0';
+      if (v >= 71) return 'background:#0f4a26;color:#86efac';
+      if (v >= 56) return 'background:#0b2e16;color:#4ade80';
+      if (v >= 41) return 'background:#1e1a05;color:#fcd34d';
+      if (v >= 26) return 'background:#2a1a08;color:#fb923c';
+      return 'background:#2a0808;color:#ff6b6b';
+    }
+
+    for (const [group, rows] of Object.entries(data)) {
+      html += `<div class="cv-group"><div class="cv-group-title">${group}</div>`;
+      for (const r of rows) {
+        const sig = cooldownData[r.ticker]
+          ? { cls: "cv-signal-cooldown", label: `⏸ ${cooldownData[r.ticker]}h` }
+          : (sigMap[r.signal] || sigMap.neutral);
+
+        const rsiCls = r.rsi != null ? (r.rsi <= 30 ? "rsi-cold" : r.rsi >= 70 ? "rsi-hot" : "") : "";
+        const trendCls = r.trend === "bullish" ? "trend-up" : r.trend === "bearish" ? "trend-dn" : "";
+        const trendLabel = r.trend === "bullish" ? "▲ Bull" : r.trend === "bearish" ? "▼ Bear" : "—";
+
+        html += `<div class="cv-card" onclick="openChart('${r.ticker}','${r.name}')">
+          <div class="cv-row1">
+            <div style="flex:1;min-width:0;display:flex;align-items:baseline;gap:4px">
+              <span class="cv-name">${r.name}</span>
+              <span class="cv-ticker">${r.ticker}</span>
+            </div>
+            <span class="cv-price">${r.currency === "EUR" ? "€" : ""}${fmtPrice(r.price)}</span>
+            <span class="cv-ret1d" style="${retBg(r.ret_1d)}">${fmt(r.ret_1d)}</span>
+          </div>
+          <div class="cv-row2">
+            <span class="cv-pill ${sig.cls}">${sig.label}</span>
+            <span class="cv-score" style="${scoreBg(r.inv_score)}">${r.inv_score ?? '—'}</span>
+            <span class="cv-indicator ${rsiCls}">RSI ${r.rsi != null ? r.rsi.toFixed(0) : '—'}</span>
+            <span class="cv-indicator ${trendCls}">${trendLabel}</span>
+            ${r.bb_pct != null ? `<span class="cv-indicator">BB ${r.bb_pct.toFixed(0)}%</span>` : ''}
+          </div>
+          <div class="cv-row3">
+            ${miniRet('1H', r.ret_1h)}
+            ${miniRet('1D', r.ret_1d)}
+            ${miniRet('1W', r.ret_1w)}
+            ${miniRet('1M', r.ret_1m)}
+            ${miniRet('YTD', r.ret_ytd)}
+            ${miniRet('1Y', r.ret_1y)}
+          </div>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    container.innerHTML = html;
+  }
+
   // ── Sparklines ───────────────────────────────────────────────────────────────
   function drawSparklines() {
     document.querySelectorAll("canvas.spark").forEach(canvas => {
@@ -1448,6 +1686,7 @@
       });
     }
     buildTable(data);
+    buildCards(data);
     drawSparklines();
   }
 
