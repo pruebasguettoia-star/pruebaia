@@ -93,16 +93,40 @@ tr:hover td{background:#161a21;}
   .card-value{font-size:16px;}
   .stats-row{grid-template-columns:1fr 1fr;gap:8px;}
   .stat-card-value{font-size:14px;}
-  /* Strategy badge wraps */
   .strategy-badge{flex-wrap:wrap;gap:6px;font-size:9.5px;}
-  /* Tables scroll + bigger tap */
-  table{min-width:480px;}
+  /* Hide tables on mobile, show cards */
+  .table-wrap{display:none !important;}
+  .p2-cards{display:block !important;}
   th,td{padding:7px 8px;font-size:10.5px;}
   .btn-sell{padding:5px 10px;font-size:10px;}
-  /* Timer bar stays visible */
   .timer-wrap{gap:4px;}
   .timer-text{font-size:8.5px;}
+  .monthly-grid{grid-template-columns:repeat(3,1fr) !important;}
 }
+/* ── Stats from API ── */
+.stats-panel{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:14px 16px;margin-bottom:18px;}
+.stats-panel-title{font-family:var(--font-mono);font-size:9px;color:var(--accent);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px;}
+.monthly-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;}
+.month-cell{background:var(--bg);border-radius:6px;padding:8px 6px;text-align:center;font-family:var(--font-mono);}
+.month-cell-label{font-size:8px;color:var(--muted);margin-bottom:2px;}
+.month-cell-value{font-size:13px;font-weight:700;}
+.month-cell-trades{font-size:8px;color:var(--muted);margin-top:2px;}
+.reasons-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+.reason-pill{font-family:var(--font-mono);font-size:9px;padding:3px 8px;border-radius:10px;border:1px solid var(--border2);color:var(--muted);}
+.export-row{display:flex;gap:8px;margin-bottom:14px;}
+.btn-export{background:none;border:1px solid var(--border2);color:var(--muted);font-family:var(--font-mono);font-size:10px;padding:6px 14px;border-radius:5px;cursor:pointer;transition:all 0.2s;text-decoration:none;}
+.btn-export:hover{border-color:var(--accent);color:var(--accent);}
+/* ── Mobile card view for positions ── */
+.p2-cards{display:none;}
+.p2-card{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:8px;}
+.p2-card-row1{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
+.p2-card-name{font-family:var(--font-sans);font-size:13px;font-weight:500;color:#e8ecf2;flex:1;min-width:0;}
+.p2-card-ticker{font-family:var(--font-mono);font-size:9px;color:var(--accent);margin-left:4px;}
+.p2-card-ret{font-family:var(--font-mono);font-size:13px;font-weight:700;padding:2px 8px;border-radius:6px;}
+.p2-card-row2{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.p2-card-pill{font-family:var(--font-mono);font-size:9px;padding:2px 7px;border-radius:5px;border:1px solid var(--border2);color:var(--muted);}
+.p2-card-actions{display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);}
+.p2-card-actions .btn-sell{flex:1;text-align:center;padding:8px;font-size:10px;}
 </style>
 </head>
 <body>
@@ -174,7 +198,23 @@ tr:hover td{background:#161a21;}
     <canvas id="equity-chart"></canvas>
   </div>
 
+  <!-- Stats Panel (from /api/paper2/stats) -->
+  <div class="stats-panel" id="stats-panel">
+    <div class="stats-panel-title">📊 Rendimiento mensual</div>
+    <div class="monthly-grid" id="monthly-grid">
+      <div class="month-cell"><div class="month-cell-label">Cargando…</div></div>
+    </div>
+    <div class="stats-panel-title" style="margin-top:14px">Razones de salida</div>
+    <div class="reasons-list" id="reasons-list"></div>
+  </div>
+
+  <!-- Export -->
+  <div class="export-row">
+    <a class="btn-export" href="/api/paper2/export" download>📥 Exportar CSV</a>
+  </div>
+
   <div class="section-title">⚡ Posiciones abiertas</div>
+  <!-- Desktop table -->
   <div class="table-wrap">
     <table>
       <thead><tr>
@@ -191,6 +231,8 @@ tr:hover td{background:#161a21;}
       <tbody id="open-body"><tr><td colspan="9" class="empty">Sin posiciones abiertas. Se abrirán cuando un activo alcance Score ≥ 85.</td></tr></tbody>
     </table>
   </div>
+  <!-- Mobile cards for open positions -->
+  <div class="p2-cards" id="open-cards"></div>
 
   <div class="section-title">Historial de operaciones cerradas</div>
   <div class="table-wrap">
@@ -210,6 +252,8 @@ tr:hover td{background:#161a21;}
       <tbody id="closed-body"><tr><td colspan="10" class="empty">Aún no hay operaciones cerradas.</td></tr></tbody>
     </table>
   </div>
+  <!-- Mobile cards for closed trades -->
+  <div class="p2-cards" id="closed-cards"></div>
 
 </div>
 
@@ -442,6 +486,62 @@ function loadData(){
       }).join("");
     }
 
+    // ── Mobile cards: open positions ──────────────────────────────────────────
+    var openCards=document.getElementById("open-cards");
+    if(openCards){
+      if(!d.open||!d.open.length){
+        openCards.innerHTML='<div style="text-align:center;color:var(--muted);padding:20px;font-family:var(--font-mono);font-size:11px">Sin posiciones abiertas</div>';
+      } else {
+        openCards.innerHTML=d.open.map(function(p){
+          var sym=p.currency==='USD'?'$':'€';
+          var retBg=p.ret_pct>=1?'background:#22763f;color:#b8e8c8':p.ret_pct>=0?'background:#1a5c35;color:#90c8a0':p.ret_pct>=-2?'background:#5c1a1a;color:#ffc0c0':'background:#7a2020;color:#ffc0c0';
+          var trailText=p.trailing_active?'<span style="color:#a78bfa">⟳ ACTIVO '+((p.trailing_drop||0)>=0?'+':'')+((p.trailing_drop||0).toFixed(1))+'%</span>':'<span style="color:var(--muted)">— espera</span>';
+          return'<div class="p2-card">'+
+            '<div class="p2-card-row1">'+
+              '<span class="p2-card-name">'+p.name+'<span class="p2-card-ticker">'+p.ticker+'</span></span>'+
+              '<span class="p2-card-ret" style="'+retBg+'">'+fmt(p.ret_pct)+'</span>'+
+            '</div>'+
+            '<div class="p2-card-row2">'+
+              '<span class="p2-card-pill">Score '+scorePill(p.entry_score)+'</span>'+
+              '<span class="p2-card-pill">'+sym+p.entry_price+' → '+sym+p.current_price+'</span>'+
+              '<span class="p2-card-pill">Trailing: '+trailText+'</span>'+
+              '<span class="p2-card-pill">'+(p.waiting_recovery?'⏳ Esperando +':p.hours_left>0?Math.floor(p.hours_left)+'h '+Math.round((p.hours_left%1)*60)+'m':'Fase 2')+'</span>'+
+            '</div>'+
+            '<div class="p2-card-actions">'+
+              '<button class="btn-sell" onclick="sellPosition(\''+p.ticker+'\',this)">Vender</button>'+
+            '</div>'+
+          '</div>';
+        }).join("");
+      }
+    }
+
+    // ── Mobile cards: closed trades ──────────────────────────────────────────
+    var closedCards=document.getElementById("closed-cards");
+    if(closedCards){
+      if(!d.closed||!d.closed.length){
+        closedCards.innerHTML='<div style="text-align:center;color:var(--muted);padding:20px;font-family:var(--font-mono);font-size:11px">Sin operaciones cerradas</div>';
+      } else {
+        closedCards.innerHTML=d.closed.slice(0,50).map(function(t){
+          var cls=t.ret_pct>=0?'pos':'neg';
+          var sym=t.currency==='USD'?'$':'€';
+          var retBg=t.ret_pct>=1?'background:#22763f;color:#b8e8c8':t.ret_pct>=0?'background:#1a5c35;color:#90c8a0':t.ret_pct>=-2?'background:#5c1a1a;color:#ffc0c0':'background:#7a2020;color:#ffc0c0';
+          var reasonCol=t.reason&&t.reason.indexOf('Stop')>=0?'#e05252':t.reason&&t.reason.indexOf('Trailing')>=0?'#a78bfa':'var(--muted)';
+          return'<div class="p2-card">'+
+            '<div class="p2-card-row1">'+
+              '<span class="p2-card-name">'+t.name+'<span class="p2-card-ticker">'+t.ticker+'</span></span>'+
+              '<span class="p2-card-ret" style="'+retBg+'">'+fmt(t.ret_pct)+'</span>'+
+            '</div>'+
+            '<div class="p2-card-row2">'+
+              '<span class="p2-card-pill">Score '+scorePill(t.entry_score)+'</span>'+
+              '<span class="p2-card-pill '+cls+'">'+(t.pnl>=0?'+':'')+sym+Math.abs(t.pnl).toFixed(0)+'</span>'+
+              '<span class="p2-card-pill" style="color:'+reasonCol+'">'+t.reason+'</span>'+
+              '<span class="p2-card-pill muted">'+t.hours_held+'h</span>'+
+            '</div>'+
+          '</div>';
+        }).join("");
+      }
+    }
+
     document.getElementById("last-update").textContent="Actualizado: "+new Date().toLocaleTimeString("es-ES");
   }).catch(function(e){console.error(e);});
 }
@@ -459,8 +559,39 @@ function resetPaper(){
   fetch("/api/paper2/reset",{method:"POST"}).then(function(){loadData();});
 }
 
+// ── Stats panel ─────────────────────────────────────────────────────────────
+function loadStats(){
+  fetch("/api/paper2/stats").then(function(r){return r.json();}).then(function(s){
+    // Monthly grid
+    var grid=document.getElementById("monthly-grid");
+    if(s.monthly&&s.monthly.length){
+      grid.innerHTML=s.monthly.map(function(m){
+        var col=m.pnl_eur>=0?'color:var(--g5)':'color:var(--r5)';
+        var bg=m.pnl_eur>=0?'background:rgba(42,145,80,0.08)':'background:rgba(158,42,42,0.08)';
+        return'<div class="month-cell" style="'+bg+'">'+
+          '<div class="month-cell-label">'+m.month+'</div>'+
+          '<div class="month-cell-value" style="'+col+'">'+(m.pnl_eur>=0?'+':'')+'€'+Math.abs(m.pnl_eur).toFixed(0)+'</div>'+
+          '<div class="month-cell-trades">'+m.trades+' trades · '+m.avg_ret+'%</div>'+
+        '</div>';
+      }).join("");
+    } else {
+      grid.innerHTML='<div class="month-cell"><div class="month-cell-label">Sin datos aún</div></div>';
+    }
+    // Exit reasons
+    var rl=document.getElementById("reasons-list");
+    if(s.exit_reasons&&s.exit_reasons.length){
+      rl.innerHTML=s.exit_reasons.map(function(r){
+        var col=r.avg_ret>=0?'color:var(--g5);border-color:rgba(42,145,80,0.3)':'color:var(--r5);border-color:rgba(158,42,42,0.3)';
+        return'<span class="reason-pill" style="'+col+'">'+r.reason+' ('+r.n+') · '+r.avg_ret+'%</span>';
+      }).join("");
+    }
+  }).catch(function(e){console.error("stats:",e);});
+}
+
 loadData();
+loadStats();
 setInterval(loadData,30000);
+setInterval(loadStats,60000);
 window.addEventListener("resize",function(){fetch("/api/paper2").then(function(r){return r.json();}).then(function(d){if(d.equity_log)drawChart(d.equity_log,d.closed);});});
 
 // ── Alpaca status ─────────────────────────────────────────────────────────────
