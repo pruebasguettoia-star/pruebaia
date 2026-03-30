@@ -31,7 +31,25 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
 
 # ── PAPER TRADING ─────────────────────────────────────────────────────────────
-PAPER_DATA_DIR      = os.environ.get("PAPER_DATA_DIR", os.path.dirname(__file__))
+def _get_data_dir():
+    """Devuelve un directorio escribible para datos persistentes."""
+    d = os.environ.get("PAPER_DATA_DIR", "")
+    if d and os.path.isdir(d):
+        return d
+    # Fallback: intentar directorio del script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_file = os.path.join(script_dir, ".write_test")
+    try:
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return script_dir
+    except Exception:
+        pass
+    # Último recurso: /tmp (no persiste entre deploys pero no crashea)
+    return "/tmp"
+
+PAPER_DATA_DIR      = _get_data_dir()
 PAPER2_FILE         = os.path.join(PAPER_DATA_DIR, "paper2_trades.json")
 PAPER2_INITIAL_CAP  = 10_000.0
 PAPER2_POSITION_PCT = 0.10

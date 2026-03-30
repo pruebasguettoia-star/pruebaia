@@ -23,11 +23,23 @@ from config import PAPER2_INITIAL_CAP, PAPER_DATA_DIR
 
 DB_PATH = os.path.join(PAPER_DATA_DIR, "paper2.db")
 _local = threading.local()
+_db_initialized = False
+
+
+def _ensure_dir():
+    """Crea el directorio de datos si no existe."""
+    d = os.path.dirname(DB_PATH)
+    if d and not os.path.exists(d):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
 
 
 def _conn():
-    """Devuelve una conexión thread-local (SQLite no es thread-safe por defecto)."""
+    """Devuelve una conexión thread-local."""
     if not hasattr(_local, "conn") or _local.conn is None:
+        _ensure_dir()
         _local.conn = sqlite3.connect(DB_PATH, timeout=10)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
@@ -401,5 +413,4 @@ def _row_to_dict(row):
     return d
 
 
-# ── INIT ON IMPORT ────────────────────────────────────────────────────────────
-init_db()
+# ── NO AUTO-INIT — llamar init_db() desde paper_engine.init() ────────────────
