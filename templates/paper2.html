@@ -88,6 +88,7 @@ tr:hover td{background:#161a21;}
   .mobile-menu .nav-tab{display:flex;}
   .nav-right .btn{display:none;}
   .hamburger{display:flex;}
+  .nav-back{display:inline !important;}
   .main{padding:14px 12px 40px;}
   .cards{grid-template-columns:1fr 1fr;gap:8px;}
   .card-value{font-size:16px;}
@@ -134,6 +135,7 @@ tr:hover td{background:#161a21;}
 <div id="loading"><div class="spinner"></div><p>Cargando paper trading Score85…</p></div>
 
 <nav class="nav">
+  <a href="/" class="nav-back" style="display:none;color:var(--muted);text-decoration:none;font-size:18px;margin-right:8px;padding:4px;">←</a>
   <span class="nav-brand">Market Tracker</span>
   <a class="nav-tab" href="/">📊 Mercado</a>
   <a class="nav-tab active" href="/paper2">⚡ Score85</a>
@@ -631,15 +633,15 @@ setInterval(loadAlpacaStatus, 60000);
 </script>
 
 <!-- Bottom Mobile Nav -->
-<nav style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;background:#13161b;border-top:1px solid #1e2229;height:56px;align-items:stretch;" id="bottom-nav">
+<nav style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;background:#13161b;border-top:1px solid #1e2229;height:56px;align-items:stretch;padding-bottom:max(0px, env(safe-area-inset-bottom));" id="bottom-nav">
   <a href="/" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#555e6e;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;">
     <span style="font-size:18px">📊</span><span>Mercado</span>
   </a>
-  <a href="/paper2" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;color:#38bdf8;background:rgba(56,189,248,0.08);">
+  <a href="/paper2" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;color:#a78bfa;background:rgba(167,139,250,0.08);">
     <span style="font-size:18px">⚡</span><span>Score85</span>
   </a>
-  <a href="/paper4" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;color:#555e6e;">
-    <span style="font-size:18px">🎯</span><span>Combo 24h</span>
+  <a href="/api/paper2/export" download style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#555e6e;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:9px;gap:3px;-webkit-tap-highlight-color:transparent;">
+    <span style="font-size:18px">📥</span><span>Export CSV</span>
   </a>
 </nav>
 <script>
