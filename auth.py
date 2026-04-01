@@ -6,15 +6,17 @@ Los endpoints protegidos requieren:
   - Header: Authorization: Bearer <token>
   - O query param: ?token=<token>
 """
+import os
 from functools import wraps
 from flask import request, jsonify
-from config import ADMIN_TOKEN
 
 
 def require_admin(f):
     """Decorator: protege un endpoint con ADMIN_TOKEN."""
     @wraps(f)
     def decorated(*args, **kwargs):
+        ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+
         if not ADMIN_TOKEN:
             # Si no hay token configurado, BLOQUEAR por seguridad
             return jsonify({"error": "ADMIN_TOKEN no configurado en Railway — endpoint bloqueado"}), 403
