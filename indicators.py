@@ -202,6 +202,53 @@ def get_trailing_pct(ticker):
     trailing = atr_pct * ATR_TRAILING_MULT
     return round(max(ATR_TRAILING_FLOOR, min(ATR_TRAILING_CAP, trailing)), 2)
 
+# ── SPY BENCHMARK (for relative strength) ─────────────────────────────────────
+_spy_cache = {"data": None, "ts": 0}
+_spy_lock = threading.Lock()
+_SPY_TTL = 600  # 10 min
+
+def get_spy_returns():
+    """Retornos de SPY a distintos plazos. Cached 10 min."""
+    now = time.monotonic()
+    with _spy_lock:
+        if _spy_cache["data"] and (now - _spy_cache["ts"]) < _SPY_TTL:
+            return _spy_cache["data"]
+    try:
+        spy = yf.Ticker("SPY")
+        hist = spy.history(period="3mo", auto_adjust=True)
+        if hist.empty or len(hist) < 15:
+            return None
+        hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+        close = hist["Close"]
+        price = float(close.iloc[-1])
+        def _ret(days):
+            if len(close) > days:
+                old = float(close.iloc[-days-1])
+                return (price - old) / old * 100 if old > 0 else None
+            return None
+        result = {"ret_5d": _ret(5), "ret_14d": _ret(14), "ret_21d": _ret(21), "price": price}
+        with _spy_lock:
+            _spy_cache["data"] = result
+            _spy_cache["ts"] = time.monotonic()
+        return result
+    except Exception as e:
+        print(f"[spy] error: {e}")
+        return None
+
+
+def calc_relative_strength(ticker_ret_14d, ticker_beta, spy_returns):
+    """Fuerza relativa del ticker vs SPY ajustada por beta.
+    Positivo = supera al mercado. Negativo = cae más de lo esperado.
+    Ej: SPY -5%, AAPL(β1.2) -8% → esperado -6%, relativo = -8%-(-6%) = -2%"""
+    if spy_returns is None or ticker_ret_14d is None:
+        return None
+    spy_ret = spy_returns.get("ret_14d")
+    if spy_ret is None:
+        return None
+    beta = ticker_beta if (ticker_beta is not None and math.isfinite(ticker_beta)) else 1.0
+    expected = spy_ret * beta
+    return round(ticker_ret_14d - expected, 2)
+
 # ── CHART/DIST CACHES (thread-safe) ──────────────────────────────────────────
 _CHART_CACHE: dict = {}
 _DIST_CACHE:  dict = {}
@@ -372,6 +419,18 @@ def fetch_ticker(name, ticker):
         # Fundamentals
         pe_ratio, div_yield, beta = get_fundamentals(ticker)
 
+        # ── Relative Strength vs SPY (beta-adjusted) ─────────────────────
+        # Calcula si el ticker cae más o menos de lo esperado vs el mercado
+        rel_strength = None
+        if ticker not in ("SPY", "^GSPC"):
+            ret_14d = None
+            if len(close) > 14:
+                p14 = float(close.iloc[-15])
+                if p14 > 0:
+                    ret_14d = (price - p14) / p14 * 100
+            spy_rets = get_spy_returns()
+            rel_strength = calc_relative_strength(ret_14d, beta, spy_rets)
+
         # ── Signal ────────────────────────────────────────────────────────
         score = 0
         if rsi is not None:
@@ -495,14 +554,32 @@ def fetch_ticker(name, ticker):
         else:
             sc_div_bonus =  0; sc_div_note = "Sin divergencia RSI (0)"
 
+        # ── Relative Strength vs SPY (±10 pts) ───────────────────────────
+        # Distingue "cae porque todo cae" de "cae más de lo esperado"
+        # rel_strength > 0 → supera al mercado (bueno para contrarian: el rebote es real)
+        # rel_strength < 0 → cae más que el mercado (malo: debilidad genuina)
+        sc_rel = 0
+        sc_rel_note = ""
+        if rel_strength is not None:
+            if   rel_strength <= -8:  sc_rel = -10; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — muy débil vs mercado (−10)"
+            elif rel_strength <= -4:  sc_rel =  -6; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — débil vs mercado (−6)"
+            elif rel_strength <= -2:  sc_rel =  -3; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — algo débil (−3)"
+            elif rel_strength <=  2:  sc_rel =   0; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — en línea con mercado (0)"
+            elif rel_strength <=  5:  sc_rel =   4; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — supera al mercado (+4)"
+            elif rel_strength <=  8:  sc_rel =   7; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — muy fuerte vs mercado (+7)"
+            else:                     sc_rel =  10; sc_rel_note = f"vs SPY {rel_strength:+.1f}% — líder de mercado (+10)"
+        else:
+            sc_rel_note = "Sin datos relativos vs SPY (0)"
+
         # Total
-        inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality
+        inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality + sc_rel
         inv_score = max(1, min(100, inv_score_raw))
 
         inv_score_breakdown = {
             "signal":  signal, "rsi": sc_rsi_note, "bb": sc_bb_note,
             "trend":   sc_trend_note, "vol": sc_vol_note, "ret1m": sc_ret1m_note,
-            "quality": sc_quality_note, "pe": sc_pe_note, "dy": sc_dy_note,
+            "quality": sc_quality_note, "rel": sc_rel_note,
+            "pe": sc_pe_note, "dy": sc_dy_note,
             "div":     sc_div_note, "total": inv_score,
         }
 
@@ -537,6 +614,7 @@ def fetch_ticker(name, ticker):
             "ret_1m": pct(price, month_ago), "ret_ytd": pct(price, ytd_price),
             "ret_1y": pct(price, year_ago), "ret_3y": pct(price, three_yr),
             "beta": beta, "prob_up_30d": prob_up_30d,
+            "rel_strength": rel_strength,
             "market_open": market_open,
             "currency": "EUR" if fx != 1.0 else "local",
         }
@@ -552,7 +630,7 @@ def breakdown_to_str(bd):
     label = "★ COMPRA FUERTE" if sig == "strong_buy" else sig.upper()
     sep = "─────────────────────"
     lines = [label, sep]
-    for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "pe", "dy", "div"):
+    for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "rel", "pe", "dy", "div"):
         v = bd.get(k, "")
         if v:
             lines.append(v)
