@@ -236,6 +236,104 @@ def get_spy_returns():
         return None
 
 
+_regime_cache = {"data": None, "ts": 0}
+_regime_lock = threading.Lock()
+_REGIME_TTL = 900  # 15 min
+
+def get_spy_regime():
+    """
+    Detecta el régimen de mercado usando SPY y URTH vs su SMA50.
+    Devuelve un dict:
+      {
+        "regime": "momentum" | "dip_buying",
+        "spy_price": float,
+        "spy_sma50": float,
+        "spy_above_sma50": bool,
+        "urth_price": float,
+        "urth_sma50": float,
+        "urth_above_sma50": bool,
+        "note": str,
+      }
+    Criterio: ambos (SPY y URTH) deben estar por encima de su SMA50
+    para activar modo momentum. Si uno falla → dip_buying.
+    """
+    now = time.monotonic()
+    with _regime_lock:
+        if _regime_cache["data"] and (now - _regime_cache["ts"]) < _REGIME_TTL:
+            return _regime_cache["data"]
+    try:
+        result = {}
+        for sym in ("SPY", "URTH"):
+            t = yf.Ticker(sym)
+            hist = t.history(period="6mo", auto_adjust=True)
+            if hist.empty or len(hist) < 50:
+                result[sym] = {"price": None, "sma50": None, "above": None}
+                continue
+            hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
+            close = hist["Close"]
+            price = float(close.iloc[-1])
+            sma50 = float(close.rolling(50).mean().iloc[-1])
+            result[sym] = {"price": round(price, 2), "sma50": round(sma50, 2), "above": price > sma50}
+
+        spy_above  = result.get("SPY",  {}).get("above")
+        urth_above = result.get("URTH", {}).get("above")
+
+        # Ambos deben confirmar para activar momentum
+        if spy_above is True and urth_above is True:
+            regime = "momentum"
+            note = f"SPY {result['SPY']['price']} > SMA50 {result['SPY']['sma50']} ✓  |  URTH {result['URTH']['price']} > SMA50 {result['URTH']['sma50']} ✓"
+        elif spy_above is None or urth_above is None:
+            regime = "dip_buying"
+            note = "Sin datos suficientes — modo dip_buying por defecto"
+        else:
+            regime = "dip_buying"
+            spy_str  = f"SPY {result['SPY']['price']} {'>' if spy_above else '<'} SMA50 {result['SPY']['sma50']}"
+            urth_str = f"URTH {result['URTH']['price']} {'>' if urth_above else '<'} SMA50 {result['URTH']['sma50']}"
+            note = f"{spy_str}  |  {urth_str}"
+
+        data = {
+            "regime": regime,
+            "spy_price":  result.get("SPY",  {}).get("price"),
+            "spy_sma50":  result.get("SPY",  {}).get("sma50"),
+            "spy_above_sma50":  spy_above,
+            "urth_price": result.get("URTH", {}).get("price"),
+            "urth_sma50": result.get("URTH", {}).get("sma50"),
+            "urth_above_sma50": urth_above,
+            "note": note,
+        }
+        with _regime_lock:
+            _regime_cache["data"] = data
+            _regime_cache["ts"] = time.monotonic()
+        return data
+    except Exception as e:
+        print(f"[regime] error: {e}")
+        return {"regime": "dip_buying", "note": f"Error: {e}"}
+
+
+def is_momentum_candidate(row):
+    """
+    Criterios de entrada para modo momentum (mercado alcista).
+    El activo debe mostrar fuerza real, no ser una caída que se compra.
+      - Tendencia alcista:  SMA50 > SMA200 (trend == "bullish")
+      - RSI entre 45 y 68: ni sobrecomprado ni en caída libre
+      - Fuerza relativa positiva vs SPY (rel_strength > 0)
+      - No está en máximos extremos: BB% < 88 (evitar entrar en la cresta)
+      - Retorno 1 mes positivo o levemente negativo (> -3%): confirma momentum
+    """
+    trend        = row.get("trend")
+    rsi          = row.get("rsi")
+    rel_strength = row.get("rel_strength")
+    bb_pct       = row.get("bb_pct")
+    ret_1m       = row.get("ret_1m")
+
+    if trend != "bullish":              return False
+    if rsi is None or not (45 <= rsi <= 68): return False
+    if rel_strength is None or rel_strength <= 0: return False
+    if bb_pct is not None and bb_pct > 88:  return False
+    if ret_1m is not None and ret_1m < -3:  return False
+    return True
+
+
 def calc_relative_strength(ticker_ret_14d, ticker_beta, spy_returns):
     """Fuerza relativa del ticker vs SPY ajustada por beta.
     Positivo = supera al mercado. Negativo = cae más de lo esperado.

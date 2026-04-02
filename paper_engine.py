@@ -11,7 +11,7 @@ from config import (
     PAPER2_TRAILING_MIN, PAPER2_MAX_HOURS,
     ALPACA_TRADEABLE, EU_TICKERS, FUTURES_TICKERS,
 )
-from indicators import get_eurusd, get_trailing_pct
+from indicators import get_eurusd, get_trailing_pct, get_spy_regime, is_momentum_candidate
 import alpaca_api
 import storage
 import telegram_alerts
@@ -119,24 +119,47 @@ def run_trading(market_data):
                     "waiting_recovery": int(hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0 and hours_held < PAPER2_MAX_HOURS),
                 })
 
-        # Nuevas entradas
-        cooldowns = storage.get_cooldowns()
+        # ── Régimen de mercado ─────────────────────────────────────────────────
+        regime_info = get_spy_regime()
+        regime      = regime_info.get("regime", "dip_buying")  # "momentum" | "dip_buying"
+
+        # Nuevas entradas — modo dual
+        cooldowns    = storage.get_cooldowns()
         open_tickers = storage.get_open_tickers()
-        capital = storage.get_capital()
+        capital      = storage.get_capital()
+
         for ticker, row in ticker_map.items():
             if ticker in cooldowns or ticker in open_tickers: continue
-            score = row.get("inv_score")
-            if score is None or score < PAPER2_MIN_SCORE: continue
             if not is_market_open(ticker): continue
+
+            score = row.get("inv_score")
+
+            # ── Modo DIP-BUYING (siempre activo) ──────────────────────────────
+            # Criterio original: score ≥ 85 (comprar activos sobrevendidos)
+            is_dip  = score is not None and score >= PAPER2_MIN_SCORE
+            # ── Modo MOMENTUM (solo cuando SPY y URTH > SMA50) ───────────────
+            # Criterio: activo en tendencia alcista con fuerza relativa positiva
+            is_mom  = regime == "momentum" and is_momentum_candidate(row)
+
+            if not is_dip and not is_mom:
+                continue
+
+            # Determinar etiqueta del modo (dip gana si ambos aplican,
+            # ya que ya se habría abierto por score — evita duplicados)
+            trade_mode = "dip_buying" if is_dip else "momentum"
+
             position_size = capital * PAPER2_POSITION_PCT
             if position_size < 1: continue
+
             fx = get_eurusd()
             if ticker in ALPACA_TRADEABLE and fx > 0:
                 native_price = round(row["price"] / fx, 4); currency = "USD"
             else:
                 native_price = row["price"]; currency = "EUR"
-            shares = position_size / row["price"]
+
+            shares       = position_size / row["price"]
             notional_usd = position_size / fx if fx > 0 else position_size
+
             storage.sub_capital(position_size)
             capital -= position_size
             storage.add_open_position({
@@ -147,11 +170,16 @@ def run_trading(market_data):
                 "trailing_active": False, "trailing_pct": get_trailing_pct(ticker),
                 "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
                 "entry_score": score, "score": score, "waiting_recovery": False,
+                "trade_mode": trade_mode,
             })
             open_tickers.add(ticker)
             if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                 threading.Thread(target=alpaca_api.place_order, args=(ticker, "buy", notional_usd), daemon=True).start()
-            threading.Thread(target=telegram_alerts.alert_trade_open, args=(ticker, row["name"], score, native_price, currency), daemon=True).start()
+            threading.Thread(
+                target=telegram_alerts.alert_trade_open,
+                args=(ticker, row["name"], score, native_price, currency),
+                daemon=True,
+            ).start()
 
         # Equity log
         positions = storage.get_open_positions()
@@ -231,10 +259,12 @@ def get_read_only_state(market_data):
     capital = storage.get_capital()
     total_equity = round(capital + open_value, 2)
     total_ret = round((total_equity - PAPER2_INITIAL_CAP) / PAPER2_INITIAL_CAP * 100, 2)
+    regime_info = get_spy_regime()
     return {
         "capital": round(capital, 2), "open_value": round(open_value, 2),
         "total_equity": total_equity, "total_ret": total_ret, "initial": PAPER2_INITIAL_CAP,
         "open": positions, "closed": storage.get_closed_trades(200),
         "equity_log": storage.get_equity_log(500),
         "min_score": PAPER2_MIN_SCORE, "hold_hours": PAPER2_HOLD_HOURS,
+        "regime": regime_info,
     }
