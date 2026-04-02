@@ -159,9 +159,10 @@ tr:hover td{background:#161a21;}
 <div class="main">
 
   <div class="strategy-badge">
-    ⚡ Estrategia Score85 · Trailing Stop &nbsp;—&nbsp;
-    <span>Compra cuando Score ≥ 85</span> &nbsp;·&nbsp;
-    <span>+5% → trailing 2% inmediato · 24h → mantiene si Score ≥ 85 · trailing 2% desde +3%</span> &nbsp;·&nbsp;
+    ⚡ Estrategia Dual · Trailing Stop &nbsp;—&nbsp;
+    <span id="hdr-mode-dip">📉 Dip-buying: Score ≥ 85</span> &nbsp;·&nbsp;
+    <span id="hdr-mode-mom" style="color:var(--muted)">📈 Momentum: SPY+URTH &gt; SMA50 (inactivo)</span> &nbsp;·&nbsp;
+    <span>+5% → trailing ATR · 24h → mantiene si Score ≥ 85</span> &nbsp;·&nbsp;
     <span>Stop loss −7% · 10% capital por posición</span>
   </div>
 
@@ -186,6 +187,37 @@ tr:hover td{background:#161a21;}
     <div class="stat-card"><div class="stat-card-label">Media ganancia / pérdida</div><div class="stat-card-value" id="s-avg">—</div><div class="stat-card-sub" id="s-avg-sub">por operación</div></div>
     <div class="stat-card"><div class="stat-card-label">Mejor / peor trade</div><div class="stat-card-value" id="s-best">—</div><div class="stat-card-sub" id="s-best-sub">—</div></div>
     <div class="stat-card"><div class="stat-card-label">Retorno medio 24h</div><div class="stat-card-value" id="s-avg24">—</div><div class="stat-card-sub" id="s-avg24-sub">por operación cerrada</div></div>
+  </div>
+
+  <!-- ── Régimen de mercado ─────────────────────────────────────────────────── -->
+  <div id="regime-bar" style="
+    display:flex;align-items:center;gap:14px;
+    background:var(--card-bg);border:1px solid var(--border);border-radius:8px;
+    padding:10px 18px;margin-bottom:14px;font-family:var(--font-mono);font-size:11px;
+  ">
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <div id="regime-dot" style="width:10px;height:10px;border-radius:50%;background:#888;flex-shrink:0;"></div>
+      <span style="color:var(--muted);font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Régimen</span>
+      <span id="regime-label" style="font-weight:600;font-size:13px;color:#e8ecf2;">—</span>
+    </div>
+    <div style="width:1px;height:22px;background:var(--border);flex-shrink:0;"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+      <div>
+        <span style="color:var(--muted);font-size:9px;">SPY</span>
+        <span id="regime-spy" style="margin-left:5px;color:#e8ecf2;">—</span>
+        <span style="color:var(--muted);font-size:9px;margin-left:4px;">SMA50</span>
+        <span id="regime-spy-sma" style="margin-left:3px;color:var(--muted);">—</span>
+      </div>
+      <div>
+        <span style="color:var(--muted);font-size:9px;">URTH</span>
+        <span id="regime-urth" style="margin-left:5px;color:#e8ecf2;">—</span>
+        <span style="color:var(--muted);font-size:9px;margin-left:4px;">SMA50</span>
+        <span id="regime-urth-sma" style="margin-left:3px;color:var(--muted);">—</span>
+      </div>
+    </div>
+    <div style="margin-left:auto;color:var(--muted);font-size:9px;" id="regime-modes">
+      Modos activos: <span id="regime-active-modes" style="color:#e8ecf2;">—</span>
+    </div>
   </div>
 
   <div class="chart-wrap">
@@ -422,6 +454,40 @@ function loadData(){
     var re=document.getElementById("c-ret");re.textContent=fmt(d.total_ret);re.className="card-value "+cc(d.total_ret);
     computeStats(d.closed);
     drawChart(d.equity_log, d.closed);
+    // ── Régimen de mercado ─────────────────────────────────────────────────
+    if(d.regime){
+      var reg=d.regime;
+      var isMom=reg.regime==="momentum";
+      var dot=document.getElementById("regime-dot");
+      var lbl=document.getElementById("regime-label");
+      dot.style.background=isMom?"#34b566":"#e5a223";
+      dot.style.boxShadow=isMom?"0 0 6px #34b56688":"0 0 6px #e5a22388";
+      lbl.textContent=isMom?"MOMENTUM":"DIP-BUYING";
+      lbl.style.color=isMom?"#34b566":"#e5a223";
+      var fmtP=function(v,sma){
+        if(v==null)return "—";
+        var arr=v>sma?"▲":"▼";
+        var col=v>sma?"#34b566":"#e5553a";
+        return "<span style='color:"+col+"'>"+arr+" $"+v.toFixed(2)+"</span>";
+      };
+      document.getElementById("regime-spy").innerHTML=fmtP(reg.spy_price,reg.spy_sma50);
+      document.getElementById("regime-spy-sma").textContent=reg.spy_sma50!=null?"$"+reg.spy_sma50.toFixed(2):"—";
+      document.getElementById("regime-urth").innerHTML=fmtP(reg.urth_price,reg.urth_sma50);
+      document.getElementById("regime-urth-sma").textContent=reg.urth_sma50!=null?"$"+reg.urth_sma50.toFixed(2):"—";
+      var modes=isMom?"Dip-buying (score ≥85) + Momentum":"Solo Dip-buying (score ≥85)";
+      document.getElementById("regime-active-modes").textContent=modes;
+      // Update header strategy labels
+      var hdrMom=document.getElementById("hdr-mode-mom");
+      if(hdrMom){
+        if(isMom){
+          hdrMom.style.color="#34b566";
+          hdrMom.textContent="📈 Momentum: SPY+URTH > SMA50 (ACTIVO)";
+        } else {
+          hdrMom.style.color="var(--muted)";
+          hdrMom.textContent="📈 Momentum: SPY+URTH > SMA50 (inactivo)";
+        }
+      }
+    }
 
     // Open positions
     var ob=document.getElementById("open-body");
@@ -446,8 +512,11 @@ function loadData(){
         var peakHtml=p.peak_price&&p.peak_price>p.entry_price
           ?'<span style="color:#a78bfa">'+sym+p.peak_price+'</span>'
           :'<span class="muted">'+sym+(p.peak_price||p.entry_price)+'</span>';
+        var modeBadge=p.trade_mode==='momentum'
+          ?'<span style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:8px;font-size:8px;font-weight:700;font-family:var(--font-mono);background:rgba(52,181,102,0.12);color:#34b566;border:1px solid rgba(52,181,102,0.25);">📈 MOM</span>'
+          :'<span style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:8px;font-size:8px;font-weight:700;font-family:var(--font-mono);background:rgba(229,162,35,0.12);color:#e5a223;border:1px solid rgba(229,162,35,0.25);">📉 DIP</span>';
         return'<tr>'+
-          '<td>'+p.name+' <span class="muted" style="font-size:9px">'+p.ticker+'</span></td>'+
+          '<td>'+p.name+' <span class="muted" style="font-size:9px">'+p.ticker+'</span>'+modeBadge+'</td>'+
           '<td>'+scorePill(p.entry_score)+'</td>'+
           '<td>'+sym+p.entry_price+'</td>'+
           '<td>'+peakHtml+'</td>'+
@@ -473,8 +542,11 @@ function loadData(){
           :'<span class="muted">'+sym+(t.peak_price||t.entry_price)+'</span>';
         var reasonCol=t.reason&&(t.reason.indexOf('Stop')===0||t.reason.indexOf('Trailing')===0)?'#e05252'
           :t.reason&&t.reason.indexOf('trailing')>=0?'#a78bfa':'var(--muted)';
+        var modeBadgeC=t.trade_mode==='momentum'
+          ?'<span style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:8px;font-size:8px;font-weight:700;font-family:var(--font-mono);background:rgba(52,181,102,0.12);color:#34b566;border:1px solid rgba(52,181,102,0.25);">📈 MOM</span>'
+          :'<span style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:8px;font-size:8px;font-weight:700;font-family:var(--font-mono);background:rgba(229,162,35,0.12);color:#e5a223;border:1px solid rgba(229,162,35,0.25);">📉 DIP</span>';
         return'<tr>'+
-          '<td>'+t.name+' <span class="muted" style="font-size:9px">'+t.ticker+'</span></td>'+
+          '<td>'+t.name+' <span class="muted" style="font-size:9px">'+t.ticker+'</span>'+modeBadgeC+'</td>'+
           '<td>'+scorePill(t.entry_score)+'</td>'+
           '<td class="muted">'+t.entry_date+'</td>'+
           '<td class="muted">'+t.exit_date+'</td>'+
@@ -498,6 +570,9 @@ function loadData(){
           var sym=p.currency==='USD'?'$':'€';
           var retBg=p.ret_pct>=1?'background:#22763f;color:#b8e8c8':p.ret_pct>=0?'background:#1a5c35;color:#90c8a0':p.ret_pct>=-2?'background:#5c1a1a;color:#ffc0c0':'background:#7a2020;color:#ffc0c0';
           var trailText=p.trailing_active?'<span style="color:#a78bfa">⟳ ACTIVO '+((p.trailing_drop||0)>=0?'+':'')+((p.trailing_drop||0).toFixed(1))+'%</span>':'<span style="color:var(--muted)">— espera</span>';
+          var modeTagO=p.trade_mode==='momentum'
+            ?'<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(52,181,102,0.15);color:#34b566;font-family:var(--font-mono);font-weight:700;">📈 MOM</span>'
+            :'<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(229,162,35,0.15);color:#e5a223;font-family:var(--font-mono);font-weight:700;">📉 DIP</span>';
           return'<div class="p2-card">'+
             '<div class="p2-card-row1">'+
               '<span class="p2-card-name">'+p.name+'<span class="p2-card-ticker">'+p.ticker+'</span></span>'+
@@ -505,6 +580,7 @@ function loadData(){
             '</div>'+
             '<div class="p2-card-row2">'+
               '<span class="p2-card-pill">Score '+scorePill(p.entry_score)+'</span>'+
+              '<span class="p2-card-pill">'+modeTagO+'</span>'+
               '<span class="p2-card-pill">'+sym+p.entry_price+' → '+sym+p.current_price+'</span>'+
               '<span class="p2-card-pill">Trailing: '+trailText+'</span>'+
               '<span class="p2-card-pill">'+(p.waiting_recovery?'⏳ Esperando +':p.hours_left>0?Math.floor(p.hours_left)+'h '+Math.round((p.hours_left%1)*60)+'m':'Fase 2')+'</span>'+
@@ -528,6 +604,9 @@ function loadData(){
           var sym=t.currency==='USD'?'$':'€';
           var retBg=t.ret_pct>=1?'background:#22763f;color:#b8e8c8':t.ret_pct>=0?'background:#1a5c35;color:#90c8a0':t.ret_pct>=-2?'background:#5c1a1a;color:#ffc0c0':'background:#7a2020;color:#ffc0c0';
           var reasonCol=t.reason&&t.reason.indexOf('Stop')>=0?'#e05252':t.reason&&t.reason.indexOf('Trailing')>=0?'#a78bfa':'var(--muted)';
+          var modeTagC=t.trade_mode==='momentum'
+            ?'<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(52,181,102,0.15);color:#34b566;font-family:var(--font-mono);font-weight:700;">📈 MOM</span>'
+            :'<span style="font-size:8px;padding:1px 5px;border-radius:8px;background:rgba(229,162,35,0.15);color:#e5a223;font-family:var(--font-mono);font-weight:700;">📉 DIP</span>';
           return'<div class="p2-card">'+
             '<div class="p2-card-row1">'+
               '<span class="p2-card-name">'+t.name+'<span class="p2-card-ticker">'+t.ticker+'</span></span>'+
@@ -535,6 +614,7 @@ function loadData(){
             '</div>'+
             '<div class="p2-card-row2">'+
               '<span class="p2-card-pill">Score '+scorePill(t.entry_score)+'</span>'+
+              '<span class="p2-card-pill">'+modeTagC+'</span>'+
               '<span class="p2-card-pill '+cls+'">'+(t.pnl>=0?'+':'')+sym+Math.abs(t.pnl).toFixed(0)+'</span>'+
               '<span class="p2-card-pill" style="color:'+reasonCol+'">'+t.reason+'</span>'+
               '<span class="p2-card-pill muted">'+t.hours_held+'h</span>'+
