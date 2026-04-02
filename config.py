@@ -60,6 +60,14 @@ PAPER2_TAKE_PROFIT  = 5.0
 PAPER2_TRAILING_MIN = 3.0
 PAPER2_MAX_HOURS    = 48.0
 
+# ── MOMENTUM MODE — parámetros diferenciados ──────────────────────────────────
+# Hold más largo para que la tendencia se desarrolle,
+# pero trailing más agresivo para asegurar ganancias antes
+MOM_HOLD_HOURS   = 60.0   # hold mínimo: 60h (~2.5 días)
+MOM_MAX_HOURS    = 72.0   # hold máximo: 72h (3 días)
+MOM_TAKE_PROFIT  = 2.0    # activa trailing desde +2% (vs +5% en dip)
+MOM_TRAILING_MIN = 2.0    # trailing mínimo desde el que se activa
+
 # ── ATR TRAILING STOP (reemplaza el trailing fijo del 2%) ────────────────────
 ATR_TRAILING_MULT  = 1.5     # multiplicador del ATR
 ATR_TRAILING_FLOOR = 1.5     # % mínimo trailing (activos estables: SHY, AGG)

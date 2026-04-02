@@ -9,6 +9,7 @@ from config import (
     PAPER2_FILE, PAPER2_INITIAL_CAP, PAPER2_POSITION_PCT, PAPER2_MIN_SCORE,
     PAPER2_HOLD_HOURS, PAPER2_STOP_LOSS, PAPER2_TAKE_PROFIT,
     PAPER2_TRAILING_MIN, PAPER2_MAX_HOURS,
+    MOM_HOLD_HOURS, MOM_MAX_HOURS, MOM_TAKE_PROFIT, MOM_TRAILING_MIN,
     ALPACA_TRADEABLE, EU_TICKERS, FUTURES_TICKERS,
 )
 from indicators import get_eurusd, get_trailing_pct, get_spy_regime, is_momentum_candidate
@@ -71,7 +72,14 @@ def run_trading(market_data):
             needs_cooldown = False
             trailing_active = bool(pos.get("trailing_active", False))
 
-            if not trailing_active and ret_pct >= PAPER2_TAKE_PROFIT:
+            # ── Parámetros según modo ─────────────────────────────────────────
+            is_mom_trade = pos.get("trade_mode") == "momentum"
+            hold_hours   = MOM_HOLD_HOURS  if is_mom_trade else PAPER2_HOLD_HOURS
+            max_hours    = MOM_MAX_HOURS   if is_mom_trade else PAPER2_MAX_HOURS
+            take_profit  = MOM_TAKE_PROFIT if is_mom_trade else PAPER2_TAKE_PROFIT
+            trailing_min = MOM_TRAILING_MIN if is_mom_trade else PAPER2_TRAILING_MIN
+
+            if not trailing_active and ret_pct >= take_profit:
                 trailing_active = True; peak_price = current_price
             if ret_pct <= PAPER2_STOP_LOSS:
                 exit_reason = f"Stop loss {ret_pct:.1f}%"; needs_cooldown = True
@@ -79,15 +87,15 @@ def run_trading(market_data):
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
             elif trailing_active and current_score is not None and current_score < PAPER2_MIN_SCORE:
                 exit_reason = f"Score bajó a {current_score}"
-            elif hours_held >= PAPER2_HOLD_HOURS:
+            elif hours_held >= hold_hours:
                 if ret_pct >= 0:
                     if current_score is not None and current_score >= PAPER2_MIN_SCORE:
-                        if not trailing_active and ret_pct >= PAPER2_TRAILING_MIN:
+                        if not trailing_active and ret_pct >= trailing_min:
                             trailing_active = True; peak_price = current_price
                     else:
-                        exit_reason = f"24h cumplidas, score {current_score} < {PAPER2_MIN_SCORE}"
-                elif hours_held >= PAPER2_MAX_HOURS:
-                    exit_reason = f"48h negativo {ret_pct:.1f}%"; needs_cooldown = True
+                        exit_reason = f"{hold_hours:.0f}h cumplidas, score {current_score} < {PAPER2_MIN_SCORE}"
+                elif hours_held >= max_hours:
+                    exit_reason = f"{max_hours:.0f}h negativo {ret_pct:.1f}%"; needs_cooldown = True
 
             if exit_reason:
                 eur_value = pos["shares"] * _to_eur(current_price, currency)
@@ -113,10 +121,10 @@ def run_trading(market_data):
                 storage.update_open_position(ticker, {
                     "current_price": round(current_price, 2), "peak_price": round(peak_price, 4),
                     "ret_pct": round(ret_pct, 2), "hours_held": round(hours_held, 1),
-                    "hours_left": round(max(0, PAPER2_HOLD_HOURS - hours_held), 1),
+                    "hours_left": round(max(0, hold_hours - hours_held), 1),
                     "score": current_score, "trailing_active": int(trailing_active),
                     "trailing_pct": trailing_pct, "trailing_drop": round(trailing_drop, 2),
-                    "waiting_recovery": int(hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0 and hours_held < PAPER2_MAX_HOURS),
+                    "waiting_recovery": int(hours_held >= hold_hours and ret_pct < 0 and hours_held < max_hours),
                 })
 
         # ── Régimen de mercado ─────────────────────────────────────────────────
@@ -240,6 +248,9 @@ def get_read_only_state(market_data):
         entry_dt = datetime.strptime(pos["entry_date"], "%Y-%m-%d %H:%M")
         hours_held = (now_dt - entry_dt).total_seconds() / 3600
         currency = pos.get("currency", "EUR")
+        is_mom_ro = pos.get("trade_mode") == "momentum"
+        hold_hrs_ro = MOM_HOLD_HOURS if is_mom_ro else PAPER2_HOLD_HOURS
+        max_hrs_ro  = MOM_MAX_HOURS  if is_mom_ro else PAPER2_MAX_HOURS
         current_price = _to_native(row["price"], currency)
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
         peak_price = pos.get("peak_price", pos["entry_price"])
@@ -247,10 +258,10 @@ def get_read_only_state(market_data):
         pos["current_price"] = round(current_price, 2)
         pos["ret_pct"] = round(ret_pct, 2)
         pos["hours_held"] = round(hours_held, 1)
-        pos["hours_left"] = round(max(0, PAPER2_HOLD_HOURS - hours_held), 1)
+        pos["hours_left"] = round(max(0, hold_hrs_ro - hours_held), 1)
         pos["score"] = row.get("inv_score")
         pos["trailing_drop"] = round(trailing_drop, 2)
-        pos["waiting_recovery"] = (hours_held >= PAPER2_HOLD_HOURS and ret_pct < 0 and hours_held < PAPER2_MAX_HOURS)
+        pos["waiting_recovery"] = (hours_held >= hold_hrs_ro and ret_pct < 0 and hours_held < max_hrs_ro)
 
     open_value = sum(
         p["shares"] * ticker_map.get(p["ticker"], {}).get("price", _to_eur(p["entry_price"], p.get("currency", "EUR")))
