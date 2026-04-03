@@ -19,6 +19,12 @@ from config import (
 )
 
 # ── EUR/USD ───────────────────────────────────────────────────────────────────
+# IMPORTANTE: _eurusd_rate almacena el tipo USD→EUR (cuántos EUR vale 1 USD).
+# Es el INVERSO del tipo de mercado estándar EUR/USD (~1.10).
+# Ejemplo: si EUR/USD = 1.10 → _eurusd_rate = 1/1.10 ≈ 0.909
+# Uso: precio_EUR = precio_USD * _eurusd_rate
+#      precio_USD = precio_EUR / _eurusd_rate
+# En app.py: set_eurusd(round(1 / _rate, 6))  ← correcto, _rate es el tipo de mercado
 _eurusd_rate: float = 1.0
 _eurusd_lock = threading.Lock()
 
@@ -27,8 +33,14 @@ def get_eurusd():
         return _eurusd_rate
 
 def set_eurusd(rate: float):
+    """Recibe el tipo USD→EUR (inverso del mercado). Si rate > 1.5 probablemente
+    se está pasando el tipo de mercado sin invertir — se corrige automáticamente."""
     global _eurusd_rate
     with _eurusd_lock:
+        if rate > 1.5:
+            # Valor anómalo: casi con certeza es el tipo EUR/USD sin invertir
+            print(f"[fx] AVISO: set_eurusd recibió {rate:.4f} (>1.5) — se interpreta como tipo de mercado y se invierte")
+            rate = round(1.0 / rate, 6)
         _eurusd_rate = rate
 
 # ── FUNDAMENTALS CACHE (thread-safe) ─────────────────────────────────────────

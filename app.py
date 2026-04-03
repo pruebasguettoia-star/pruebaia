@@ -75,6 +75,7 @@ class RWLock:
 cache = {"data": None, "last_updated": None, "last_refresh_ts": None}
 cache_lock = RWLock()
 alerted = set()
+_refresh_lock = threading.Lock()  # evita ejecuciones concurrentes de refresh_data
 
 # ── EMAIL with retry ─────────────────────────────────────────────────────────
 _email_failures = 0
@@ -127,56 +128,62 @@ def send_alert_email(strong_buys, retry=2):
 
 # ── DATA REFRESH ──────────────────────────────────────────────────────────────
 def refresh_data():
-    t0 = datetime.now()
-    n  = sum(len(v) for v in GROUPS.values())
-    print(f"[{t0.strftime('%H:%M:%S')}] Fetching {n} tickers…")
-
+    if not _refresh_lock.acquire(blocking=False):
+        print("[refresh] ya en curso — omitiendo llamada concurrente")
+        return
     try:
-        _fx = yf.Ticker("EURUSD=X").fast_info
-        _rate = getattr(_fx, "last_price", None)
-        if _rate and _rate > 0:
-            indicators.set_eurusd(round(1 / _rate, 6))
-    except Exception as e:
-        print(f"[fx] error: {e}")
+        t0 = datetime.now()
+        n  = sum(len(v) for v in GROUPS.values())
+        print(f"[{t0.strftime('%H:%M:%S')}] Fetching {n} tickers…")
 
-    all_tasks = [(g, name, ticker) for g, tickers in GROUPS.items() for name, ticker in tickers]
-    row_map = {}
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {ex.submit(indicators.fetch_ticker, name, ticker): (g, ticker) for g, name, ticker in all_tasks}
-        for fut in as_completed(futures):
-            g, ticker = futures[fut]
-            try:
-                row = fut.result()
-                if row: row_map[ticker] = (g, row)
-            except Exception as e:
-                print(f"  [warn] {ticker}: {e}")
+        try:
+            _fx = yf.Ticker("EURUSD=X").fast_info
+            _rate = getattr(_fx, "last_price", None)
+            if _rate and _rate > 0:
+                indicators.set_eurusd(round(1 / _rate, 6))
+        except Exception as e:
+            print(f"[fx] error: {e}")
 
-    result = {g: [] for g in GROUPS}
-    strong_buys = []
-    for g, name, ticker in all_tasks:
-        if ticker in row_map:
-            _, row = row_map[ticker]
-            result[g].append(row)
-            if row["signal"] == "strong_buy" and ticker not in alerted:
-                strong_buys.append(row)
-                alerted.add(ticker)
-            elif row["signal"] != "strong_buy" and ticker in alerted:
-                alerted.discard(ticker)
+        all_tasks = [(g, name, ticker) for g, tickers in GROUPS.items() for name, ticker in tickers]
+        row_map = {}
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futures = {ex.submit(indicators.fetch_ticker, name, ticker): (g, ticker) for g, name, ticker in all_tasks}
+            for fut in as_completed(futures):
+                g, ticker = futures[fut]
+                try:
+                    row = fut.result()
+                    if row: row_map[ticker] = (g, row)
+                except Exception as e:
+                    print(f"  [warn] {ticker}: {e}")
 
-    cache_lock.write_acquire()
-    try:
-        cache["data"] = result
-        cache["last_updated"] = datetime.now().strftime("%d-%b-%y %H:%M")
-        cache["last_refresh_ts"] = time.time()
+        result = {g: [] for g in GROUPS}
+        strong_buys = []
+        for g, name, ticker in all_tasks:
+            if ticker in row_map:
+                _, row = row_map[ticker]
+                result[g].append(row)
+                if row["signal"] == "strong_buy" and ticker not in alerted:
+                    strong_buys.append(row)
+                    alerted.add(ticker)
+                elif row["signal"] != "strong_buy" and ticker in alerted:
+                    alerted.discard(ticker)
+
+        cache_lock.write_acquire()
+        try:
+            cache["data"] = result
+            cache["last_updated"] = datetime.now().strftime("%d-%b-%y %H:%M")
+            cache["last_refresh_ts"] = time.time()
+        finally:
+            cache_lock.write_release()
+
+        elapsed = (datetime.now() - t0).total_seconds()
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Done in {elapsed:.1f}s.")
+        indicators.purge_intraday_cache()
+        if strong_buys:
+            threading.Thread(target=send_alert_email, args=(strong_buys,), daemon=True).start()
+            threading.Thread(target=telegram_alerts.alert_strong_buys, args=(strong_buys,), daemon=True).start()
     finally:
-        cache_lock.write_release()
-
-    elapsed = (datetime.now() - t0).total_seconds()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Done in {elapsed:.1f}s.")
-    indicators.purge_intraday_cache()
-    if strong_buys:
-        threading.Thread(target=send_alert_email, args=(strong_buys,), daemon=True).start()
-        threading.Thread(target=telegram_alerts.alert_strong_buys, args=(strong_buys,), daemon=True).start()
+        _refresh_lock.release()
 
 
 def background_refresh():

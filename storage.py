@@ -75,7 +75,8 @@ def init_db():
             hours_left REAL DEFAULT 24,
             entry_score INTEGER,
             score INTEGER,
-            waiting_recovery INTEGER DEFAULT 0
+            waiting_recovery INTEGER DEFAULT 0,
+            trade_mode TEXT DEFAULT 'dip_buying'
         );
 
         CREATE TABLE IF NOT EXISTS closed_pos (
@@ -111,6 +112,13 @@ def init_db():
         );
     """)
     conn.commit()
+    # Migración: añadir columna trade_mode si la DB ya existía sin ella
+    try:
+        conn.execute("ALTER TABLE open_pos ADD COLUMN trade_mode TEXT DEFAULT 'dip_buying'")
+        conn.commit()
+        print("[storage] columna trade_mode añadida a open_pos")
+    except Exception:
+        pass  # La columna ya existe — normal en DB nueva o ya migrada
     print(f"[storage] SQLite inicializado: {DB_PATH}")
 
 
@@ -146,8 +154,9 @@ def add_open_position(pos):
     _conn().execute("""
         INSERT INTO open_pos (ticker, name, entry_date, entry_price, current_price,
             peak_price, currency, shares, ret_pct, trailing_drop, trailing_active,
-            trailing_pct, hours_held, hours_left, entry_score, score, waiting_recovery)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trailing_pct, hours_held, hours_left, entry_score, score, waiting_recovery,
+            trade_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         pos["ticker"], pos.get("name"), pos["entry_date"], pos["entry_price"],
         pos.get("current_price", pos["entry_price"]), pos.get("peak_price", pos["entry_price"]),
@@ -156,6 +165,7 @@ def add_open_position(pos):
         pos.get("trailing_pct", 2.0), pos.get("hours_held", 0),
         pos.get("hours_left", 24), pos.get("entry_score"), pos.get("score"),
         int(pos.get("waiting_recovery", False)),
+        pos.get("trade_mode", "dip_buying"),
     ))
     _conn().commit()
 

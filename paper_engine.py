@@ -116,7 +116,7 @@ def run_trading(market_data):
                 if needs_cooldown:
                     storage.set_cooldown(ticker, (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
                 threading.Thread(target=alpaca_api.place_order, args=(ticker, "sell", 0), daemon=True).start()
-                threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name",""), round(ret_pct,2), round(pos["shares"]*(current_price-pos["entry_price"]),2), exit_reason, currency), daemon=True).start()
+                threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR"), daemon=True).start()
             else:
                 storage.update_open_position(ticker, {
                     "current_price": round(current_price, 2), "peak_price": round(peak_price, 4),
@@ -167,6 +167,7 @@ def run_trading(market_data):
 
             shares       = position_size / row["price"]
             notional_usd = position_size / fx if fx > 0 else position_size
+            trailing_pct_entry = get_trailing_pct(ticker)
 
             storage.sub_capital(position_size)
             capital -= position_size
@@ -175,7 +176,7 @@ def run_trading(market_data):
                 "entry_price": native_price, "current_price": native_price,
                 "peak_price": native_price, "currency": currency,
                 "shares": round(shares, 6), "ret_pct": 0.0, "trailing_drop": 0.0,
-                "trailing_active": False, "trailing_pct": get_trailing_pct(ticker),
+                "trailing_active": False, "trailing_pct": trailing_pct_entry,
                 "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
                 "entry_score": score, "score": score, "waiting_recovery": False,
                 "trade_mode": trade_mode,
@@ -192,7 +193,11 @@ def run_trading(market_data):
         # Equity log
         positions = storage.get_open_positions()
         open_value_eur = sum(
-            p["shares"] * ticker_map.get(p["ticker"], {}).get("price", _to_eur(p["entry_price"], p.get("currency", "EUR")))
+            p["shares"] * (
+                ticker_map[p["ticker"]]["price"]
+                if p["ticker"] in ticker_map
+                else _to_eur(p["entry_price"], p.get("currency", "EUR"))
+            )
             for p in positions
         )
         storage.add_equity_snapshot(storage.get_capital() + open_value_eur)
@@ -214,8 +219,10 @@ def sell_manual(ticker, market_data):
         current_price = _to_native(row["price"], currency) if row else pos["entry_price"]
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
         pnl = pos["shares"] * (current_price - pos["entry_price"])
-        eur_price = row["price"] if row else _to_eur(pos["entry_price"], currency)
-        storage.add_capital(pos["shares"] * eur_price)
+        eur_exit_price  = row["price"] if row else _to_eur(current_price, currency)
+        eur_entry_price = _to_eur(pos["entry_price"], currency)
+        pnl_eur = pos["shares"] * (eur_exit_price - eur_entry_price)
+        storage.add_capital(pos["shares"] * eur_exit_price)
         storage.remove_open_position(ticker)
         storage.add_closed_trade({
             "ticker": ticker, "name": pos.get("name"),
@@ -223,13 +230,14 @@ def sell_manual(ticker, market_data):
             "entry_price": pos["entry_price"], "exit_price": round(current_price, 2),
             "peak_price": round(pos.get("peak_price", pos["entry_price"]), 2),
             "currency": currency, "shares": pos["shares"],
-            "ret_pct": round(ret_pct, 2), "pnl": round(pnl, 2), "pnl_eur": round(pnl, 2),
+            "ret_pct": round(ret_pct, 2), "pnl": round(pnl, 2), "pnl_eur": round(pnl_eur, 2),
             "reason": "Venta manual", "entry_score": pos.get("entry_score"),
             "hours_held": pos.get("hours_held"), "trailing_active": pos.get("trailing_active", False),
             "trailing_pct": pos.get("trailing_pct"),
         })
         storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
         threading.Thread(target=alpaca_api.place_order, args=(ticker, "sell", 0), daemon=True).start()
+        threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name", ""), round(ret_pct, 2), round(pnl_eur, 2), "Venta manual", "EUR"), daemon=True).start()
     return {"status": "sold", "cooldown_hours": 48}
 
 def reset():
@@ -264,7 +272,11 @@ def get_read_only_state(market_data):
         pos["waiting_recovery"] = (hours_held >= hold_hrs_ro and ret_pct < 0 and hours_held < max_hrs_ro)
 
     open_value = sum(
-        p["shares"] * ticker_map.get(p["ticker"], {}).get("price", _to_eur(p["entry_price"], p.get("currency", "EUR")))
+        p["shares"] * (
+            ticker_map[p["ticker"]]["price"]
+            if p["ticker"] in ticker_map
+            else _to_eur(p["entry_price"], p.get("currency", "EUR"))
+        )
         for p in positions
     )
     capital = storage.get_capital()
@@ -277,5 +289,6 @@ def get_read_only_state(market_data):
         "open": positions, "closed": storage.get_closed_trades(200),
         "equity_log": storage.get_equity_log(500),
         "min_score": PAPER2_MIN_SCORE, "hold_hours": PAPER2_HOLD_HOURS,
+        "mom_hold_hours": MOM_HOLD_HOURS,
         "regime": regime_info,
     }
