@@ -169,8 +169,9 @@ _atr_cache: dict = {}
 _atr_lock = threading.Lock()
 _ATR_TTL = 3600  # 1 hora — ATR no cambia rápido
 
-def calc_atr_pct(ticker):
+def calc_atr_pct(ticker, hist=None):
     """Calcula el ATR(14) como % del precio. Cached 1h.
+    Acepta hist pre-descargado (de fetch_ticker) para evitar un request extra a yfinance.
     Devuelve float (ej: 2.5 para 2.5%) o None."""
     now = time.monotonic()
     with _atr_lock:
@@ -178,8 +179,9 @@ def calc_atr_pct(ticker):
         if hit and (now - hit[0]) < _ATR_TTL:
             return hit[1]
     try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="1mo", auto_adjust=True)
+        if hist is None or hist.empty or len(hist) < 15:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="1mo", auto_adjust=True)
         if hist.empty or len(hist) < 15:
             return None
         high = hist["High"]
@@ -202,13 +204,13 @@ def calc_atr_pct(ticker):
         pass
     return None
 
-def get_trailing_pct(ticker):
+def get_trailing_pct(ticker, hist=None):
     """Devuelve el trailing stop % adaptado a la volatilidad del ticker.
     SHY (~0.3% ATR) → 1.5% trailing
     SPY (~1.2% ATR) → 1.8% trailing
     ARKK (~3.5% ATR) → 5.0% trailing (capped)
     """
-    atr_pct = calc_atr_pct(ticker)
+    atr_pct = calc_atr_pct(ticker, hist=hist)
     if atr_pct is None:
         return ATR_DEFAULT_PCT
     trailing = atr_pct * ATR_TRAILING_MULT
@@ -691,6 +693,9 @@ def fetch_ticker(name, ticker):
         spark_raw = close.iloc[-30:].tolist() if len(close) >= 30 else close.tolist()
         s_min, s_max = min(spark_raw), max(spark_raw)
         sparkline = [round((v - s_min) / (s_max - s_min) * 100, 1) for v in spark_raw] if s_max > s_min else [50.0] * len(spark_raw)
+
+        # Precalentar cache ATR usando el hist ya descargado — evita request extra en paper_engine
+        calc_atr_pct(ticker, hist=hist)
 
         # Market open
         bar_age_hours = (now - last_bar).total_seconds() / 3600

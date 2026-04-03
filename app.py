@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import (
     GROUPS, REFRESH_INTERVAL, PAPER2_INITIAL_CAP, PAPER2_HOLD_HOURS, PAPER2_MIN_SCORE,
     EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO, EMAIL_ENABLED, alpaca_enabled, alpaca_url,
+    CHART_TTL,
 )
 from auth import require_admin
 import indicators
@@ -448,7 +449,9 @@ def api_chart(ticker):
             "bb_up": series(bb_up), "bb_lo": series(bb_lo),
             "sma50": series(sma50), "sma200": series(sma200), "signals": signals}
         indicators.chart_cache_set(ticker, result)
-        return jsonify(result)
+        resp = jsonify(result)
+        resp.headers["Cache-Control"] = f"public, max-age={int(CHART_TTL)}"
+        return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -495,7 +498,9 @@ def api_dist(ticker):
             "bucket_labels": [round(bmin + i * bw, 0) for i in range(nb)],
             "seasonality": seasonality, "beta": beta}
         indicators.dist_cache_set(ticker, result)
-        return jsonify(result)
+        resp = jsonify(result)
+        resp.headers["Cache-Control"] = f"public, max-age={int(CHART_TTL)}"
+        return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
