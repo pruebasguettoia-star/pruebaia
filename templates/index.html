@@ -2615,14 +2615,24 @@
     if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
     try {
       await fetch("/api/refresh", { method: "POST" });
+      const tsAtStart = lastUpdatedTs;   // timestamp antes del refresh
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
-        const res  = await fetch("/api/data");
-        const json = await res.json();
-        if (json.data) { render(json.data, json.last_updated, true); }
-        if (attempts >= 3) { clearInterval(poll); finishRefresh(); }
-        if (attempts > 60) { clearInterval(poll); finishRefresh(); }
+        try {
+          const res  = await fetch("/api/data");
+          const json = await res.json();
+          if (json.data) {
+            render(json.data, json.last_updated, true);
+            // Parar en cuanto el servidor confirma datos nuevos
+            if (json.last_updated !== tsAtStart) {
+              clearInterval(poll);
+              finishRefresh();
+              return;
+            }
+          }
+        } catch(e) { /* seguir intentando */ }
+        if (attempts >= 60) { clearInterval(poll); finishRefresh(); }
       }, 2000);
     } catch(e) { finishRefresh(); }
   }
@@ -2749,8 +2759,19 @@
       pullData(true).then(hasData => { if (!hasData) triggerRefresh(); });
     }
   })();
-  setInterval(updateCountdown, 1_000);
+  let _countdownInterval = setInterval(updateCountdown, 1_000);
   setTimeout(makeSortable, 100);
+
+  // ── Page Visibility — pausa el auto-refresh cuando el tab está oculto ────────
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearInterval(_countdownInterval);
+    } else {
+      // Al volver: si los datos están caducados, refrescar inmediatamente
+      if (!isRefreshing && Date.now() >= nextRefreshAt) triggerRefresh();
+      _countdownInterval = setInterval(updateCountdown, 1_000);
+    }
+  });
 
   // ── Mobile menu ───────────────────────────────────────────────────────────
   function toggleMobMenu() {
