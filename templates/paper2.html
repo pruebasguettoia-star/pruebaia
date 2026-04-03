@@ -169,6 +169,19 @@ tr:hover td{background:#161a21;}
     <button class="btn btn-danger" onclick="resetPaper();closeMobileMenu()">⚠ Reset Score85</button>
   </div>
 </div>
+<!-- Modal de confirmación (venta / reset) — debe estar en el DOM antes del script -->
+<div class="p2-modal-overlay" id="p2-confirm-modal">
+  <div class="p2-modal">
+    <div class="p2-modal-icon" id="p2-modal-icon">⚠️</div>
+    <div class="p2-modal-title" id="p2-modal-title">Confirmar acción</div>
+    <div class="p2-modal-body" id="p2-modal-body"></div>
+    <div class="p2-modal-actions">
+      <button class="p2-modal-cancel" onclick="closeP2Modal()">Cancelar</button>
+      <button class="p2-modal-confirm" id="p2-modal-ok">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <div class="main">
 
   <div class="strategy-badge">
@@ -799,19 +812,6 @@ function loadAlpacaStatus(){
 loadAlpacaStatus();
 setInterval(loadAlpacaStatus, 60000);
 </script>
-
-<!-- Modal de confirmación (venta / reset) -->
-<div class="p2-modal-overlay" id="p2-confirm-modal">
-  <div class="p2-modal">
-    <div class="p2-modal-icon" id="p2-modal-icon">⚠️</div>
-    <div class="p2-modal-title" id="p2-modal-title">Confirmar acción</div>
-    <div class="p2-modal-body" id="p2-modal-body"></div>
-    <div class="p2-modal-actions">
-      <button class="p2-modal-cancel" onclick="closeP2Modal()">Cancelar</button>
-      <button class="p2-modal-confirm" id="p2-modal-ok">Confirmar</button>
-    </div>
-  </div>
-</div>
 
 <!-- Bottom Mobile Nav -->
 <nav style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;background:#13161b;border-top:1px solid #1e2229;height:56px;align-items:stretch;padding-bottom:max(0px, env(safe-area-inset-bottom));" id="bottom-nav">
