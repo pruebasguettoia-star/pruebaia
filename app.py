@@ -166,6 +166,11 @@ def refresh_data():
         for g, name, ticker in all_tasks:
             if ticker in row_map:
                 _, row = row_map[ticker]
+                # Precalcular breakdown a string una sola vez en el ciclo de refresh
+                bd = row.get("inv_score_breakdown")
+                if isinstance(bd, dict):
+                    row = dict(row)
+                    row["inv_score_breakdown"] = indicators.breakdown_to_str(bd)
                 result[g].append(row)
                 with alerted_lock:
                     if row["signal"] == "strong_buy" and ticker not in alerted:
@@ -245,9 +250,7 @@ def api_data():
         out[group] = []
         for row in rows:
             r = dict(row)
-            bd = r.get("inv_score_breakdown")
-            if isinstance(bd, dict):
-                r["inv_score_breakdown"] = indicators.breakdown_to_str(bd)
+            # inv_score_breakdown ya viene como string desde refresh_data
             out[group].append(r)
 
     # Cooldowns from SQLite

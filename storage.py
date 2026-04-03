@@ -43,6 +43,8 @@ def _conn():
         _local.conn = sqlite3.connect(DB_PATH, timeout=10)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
+        _local.conn.execute("PRAGMA synchronous=NORMAL")   # más rápido en Railway Volume; WAL garantiza durabilidad
+        _local.conn.execute("PRAGMA cache_size=-8000")     # 8 MB de cache en memoria
         _local.conn.execute("PRAGMA busy_timeout=5000")
     return _local.conn
 

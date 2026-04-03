@@ -214,68 +214,20 @@ def get_trailing_pct(ticker):
     trailing = atr_pct * ATR_TRAILING_MULT
     return round(max(ATR_TRAILING_FLOOR, min(ATR_TRAILING_CAP, trailing)), 2)
 
-# ── SPY BENCHMARK (for relative strength) ─────────────────────────────────────
-_spy_cache = {"data": None, "ts": 0}
-_spy_lock = threading.Lock()
-_SPY_TTL = 600  # 10 min
+# ── SPY BENCHMARK — cache unificado (get_spy_returns + get_spy_regime comparten un único fetch) ──
+_spy_unified_cache = {"hist": None, "returns": None, "regime": None, "ts": 0}
+_spy_unified_lock  = threading.Lock()
+_SPY_TTL    = 600   # 10 min — usado por get_spy_returns
+_REGIME_TTL = 900   # 15 min — usado por get_spy_regime
 
-def get_spy_returns():
-    """Retornos de SPY a distintos plazos. Cached 10 min."""
+
+def _refresh_spy_cache():
+    """Descarga SPY (6mo) y URTH (6mo) una sola vez y rellena returns + regime."""
     now = time.monotonic()
-    with _spy_lock:
-        if _spy_cache["data"] and (now - _spy_cache["ts"]) < _SPY_TTL:
-            return _spy_cache["data"]
-    try:
-        spy = yf.Ticker("SPY")
-        hist = spy.history(period="3mo", auto_adjust=True)
-        if hist.empty or len(hist) < 15:
-            return None
-        hist.index = hist.index.tz_localize(None) if hist.index.tzinfo else hist.index
-        close = hist["Close"]
-        price = float(close.iloc[-1])
-        def _ret(days):
-            if len(close) > days:
-                old = float(close.iloc[-days-1])
-                return (price - old) / old * 100 if old > 0 else None
-            return None
-        result = {"ret_5d": _ret(5), "ret_14d": _ret(14), "ret_21d": _ret(21), "price": price}
-        with _spy_lock:
-            _spy_cache["data"] = result
-            _spy_cache["ts"] = time.monotonic()
-        return result
-    except Exception as e:
-        print(f"[spy] error: {e}")
-        return None
-
-
-_regime_cache = {"data": None, "ts": 0}
-_regime_lock = threading.Lock()
-_REGIME_TTL = 900  # 15 min
-
-def get_spy_regime():
-    """
-    Detecta el régimen de mercado usando SPY y URTH vs su SMA50.
-    Devuelve un dict:
-      {
-        "regime": "momentum" | "dip_buying",
-        "spy_price": float,
-        "spy_sma50": float,
-        "spy_above_sma50": bool,
-        "urth_price": float,
-        "urth_sma50": float,
-        "urth_above_sma50": bool,
-        "note": str,
-      }
-    Criterio: ambos (SPY y URTH) deben estar por encima de su SMA50
-    para activar modo momentum. Si uno falla → dip_buying.
-    """
-    now = time.monotonic()
-    with _regime_lock:
-        if _regime_cache["data"] and (now - _regime_cache["ts"]) < _REGIME_TTL:
-            return _regime_cache["data"]
-    try:
-        result = {}
-        for sym in ("SPY", "URTH"):
+    result = {}
+    spy_close = None
+    for sym in ("SPY", "URTH"):
+        try:
             t = yf.Ticker(sym)
             hist = t.history(period="6mo", auto_adjust=True)
             if hist.empty or len(hist) < 50:
@@ -286,40 +238,82 @@ def get_spy_regime():
             price = float(close.iloc[-1])
             sma50 = float(close.rolling(50).mean().iloc[-1])
             result[sym] = {"price": round(price, 2), "sma50": round(sma50, 2), "above": price > sma50}
+            if sym == "SPY":
+                spy_close = close
+        except Exception as e:
+            print(f"[spy] error {sym}: {e}")
+            result[sym] = {"price": None, "sma50": None, "above": None}
 
-        spy_above  = result.get("SPY",  {}).get("above")
-        urth_above = result.get("URTH", {}).get("above")
+    # Returns de SPY a distintos plazos (reutiliza hist ya descargado)
+    spy_returns = None
+    if spy_close is not None and len(spy_close) >= 22:
+        price = float(spy_close.iloc[-1])
+        def _ret(days):
+            if len(spy_close) > days:
+                old = float(spy_close.iloc[-days - 1])
+                return (price - old) / old * 100 if old > 0 else None
+            return None
+        spy_returns = {"ret_5d": _ret(5), "ret_14d": _ret(14), "ret_21d": _ret(21), "price": price}
 
-        # Ambos deben confirmar para activar momentum
-        if spy_above is True and urth_above is True:
-            regime = "momentum"
-            note = f"SPY {result['SPY']['price']} > SMA50 {result['SPY']['sma50']} ✓  |  URTH {result['URTH']['price']} > SMA50 {result['URTH']['sma50']} ✓"
-        elif spy_above is None or urth_above is None:
-            regime = "dip_buying"
-            note = "Sin datos suficientes — modo dip_buying por defecto"
-        else:
-            regime = "dip_buying"
-            spy_str  = f"SPY {result['SPY']['price']} {'>' if spy_above else '<'} SMA50 {result['SPY']['sma50']}"
-            urth_str = f"URTH {result['URTH']['price']} {'>' if urth_above else '<'} SMA50 {result['URTH']['sma50']}"
-            note = f"{spy_str}  |  {urth_str}"
+    # Régimen
+    spy_above  = result.get("SPY",  {}).get("above")
+    urth_above = result.get("URTH", {}).get("above")
+    if spy_above is True and urth_above is True:
+        regime = "momentum"
+        note = (f"SPY {result['SPY']['price']} > SMA50 {result['SPY']['sma50']} ✓  |  "
+                f"URTH {result['URTH']['price']} > SMA50 {result['URTH']['sma50']} ✓")
+    elif spy_above is None or urth_above is None:
+        regime = "dip_buying"
+        note = "Sin datos suficientes — modo dip_buying por defecto"
+    else:
+        regime = "dip_buying"
+        spy_str  = f"SPY {result['SPY']['price']} {'>' if spy_above else '<'} SMA50 {result['SPY']['sma50']}"
+        urth_str = f"URTH {result['URTH']['price']} {'>' if urth_above else '<'} SMA50 {result['URTH']['sma50']}"
+        note = f"{spy_str}  |  {urth_str}"
 
-        data = {
-            "regime": regime,
-            "spy_price":  result.get("SPY",  {}).get("price"),
-            "spy_sma50":  result.get("SPY",  {}).get("sma50"),
-            "spy_above_sma50":  spy_above,
-            "urth_price": result.get("URTH", {}).get("price"),
-            "urth_sma50": result.get("URTH", {}).get("sma50"),
-            "urth_above_sma50": urth_above,
-            "note": note,
-        }
-        with _regime_lock:
-            _regime_cache["data"] = data
-            _regime_cache["ts"] = time.monotonic()
-        return data
-    except Exception as e:
-        print(f"[regime] error: {e}")
-        return {"regime": "dip_buying", "note": f"Error: {e}"}
+    regime_data = {
+        "regime": regime,
+        "spy_price":        result.get("SPY",  {}).get("price"),
+        "spy_sma50":        result.get("SPY",  {}).get("sma50"),
+        "spy_above_sma50":  spy_above,
+        "urth_price":       result.get("URTH", {}).get("price"),
+        "urth_sma50":       result.get("URTH", {}).get("sma50"),
+        "urth_above_sma50": urth_above,
+        "note": note,
+    }
+
+    with _spy_unified_lock:
+        _spy_unified_cache["returns"] = spy_returns
+        _spy_unified_cache["regime"]  = regime_data
+        _spy_unified_cache["ts"]      = time.monotonic()
+
+
+def get_spy_returns():
+    """Retornos de SPY a distintos plazos. Cached _SPY_TTL."""
+    now = time.monotonic()
+    with _spy_unified_lock:
+        if _spy_unified_cache["returns"] is not None and (now - _spy_unified_cache["ts"]) < _SPY_TTL:
+            return _spy_unified_cache["returns"]
+    _refresh_spy_cache()
+    with _spy_unified_lock:
+        return _spy_unified_cache["returns"]
+
+
+def get_spy_regime():
+    """
+    Detecta el régimen de mercado usando SPY y URTH vs su SMA50.
+    Devuelve un dict con regime, spy_price, spy_sma50, urth_price, urth_sma50, note.
+    Criterio: ambos (SPY y URTH) deben estar por encima de su SMA50
+    para activar modo momentum. Si uno falla → dip_buying.
+    Cache compartido con get_spy_returns — un solo fetch cubre ambas funciones.
+    """
+    now = time.monotonic()
+    with _spy_unified_lock:
+        if _spy_unified_cache["regime"] is not None and (now - _spy_unified_cache["ts"]) < _REGIME_TTL:
+            return _spy_unified_cache["regime"]
+    _refresh_spy_cache()
+    with _spy_unified_lock:
+        return _spy_unified_cache["regime"] or {"regime": "dip_buying", "note": "Sin datos"}
 
 
 def is_momentum_candidate(row):

@@ -134,7 +134,10 @@ USD_TICKERS = {
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
     "AMD","BAC","COIN","JPM","NFLX","PLTR",
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
-    "TLT","SHY","AGG","HYG","TIP","BZ=F","CL=F","NG=F","ZW=F",
+    "TLT","SHY","AGG","HYG","TIP",
+    # Nota: futuros (BZ=F, CL=F, NG=F, ZW=F) y divisas (EURUSD=X, etc.) se excluyen
+    # deliberadamente — sus precios ya son en USD/unidad de contrato y no deben
+    # convertirse a EUR (distorsionaría el precio mostrado)
     "GLD","SLV","PPLT","GDX","GDXJ","SILJ","COPX","XME","NEM","FCX","AG","GOLD",
     "ARKK","IBB","SOXX","KRE",
     "EWY","MCHI","EWT","VNM","EWZ","EWW","ARGT","ECH","EPU",

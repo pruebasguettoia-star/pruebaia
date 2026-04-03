@@ -3,6 +3,7 @@ paper_engine.py — Motor de paper trading Score85.
 Usa SQLite (storage.py) en vez de JSON.
 """
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from config import (
@@ -19,13 +20,28 @@ import telegram_alerts
 
 paper2_lock = threading.Lock()
 
+# Pools compartidos — evitan acumulación de threads daemon en ciclos con muchas operaciones
+_tg_pool     = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tg")
+_alpaca_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="alpaca")
+
 def is_market_open(ticker):
     now_utc = datetime.utcnow()
-    if now_utc.weekday() >= 5: return False
+    if now_utc.weekday() >= 5:
+        return False
     t = now_utc.hour * 60 + now_utc.minute
-    if ticker in FUTURES_TICKERS: return True
-    if ticker in EU_TICKERS: return 8*60 <= t <= 16*60+30
-    return 13*60+30 <= t <= 20*60
+    if ticker in FUTURES_TICKERS:
+        return True
+    if ticker in EU_TICKERS:
+        # Europa: LSE/Euronext abren 08:00 hora local
+        # En invierno (CET=UTC+1): 07:00–16:30 UTC
+        # En verano (CEST=UTC+2):  06:00–15:30 UTC
+        # Aproximación conservadora que cubre ambos: 06:00–16:30 UTC
+        return 6 * 60 <= t <= 16 * 60 + 30
+    # US: NYSE/NASDAQ 09:30–16:00 ET
+    # ET invierno = UTC-5 → 14:30–21:00 UTC
+    # ET verano  = UTC-4 → 13:30–20:00 UTC
+    # Aproximación conservadora: 13:30–21:00 UTC
+    return 13 * 60 + 30 <= t <= 21 * 60
 
 def _to_eur(price_native, currency):
     fx = get_eurusd()
@@ -107,7 +123,7 @@ def run_trading(market_data):
                     "entry_price": pos["entry_price"], "exit_price": round(current_price, 2),
                     "peak_price": round(peak_price, 2), "currency": currency,
                     "shares": pos["shares"], "ret_pct": round(ret_pct, 2),
-                    "pnl": round(pos["shares"] * (current_price - pos["entry_price"]), 2),
+                    "pnl": round(pnl_eur, 2),        # siempre en EUR — evita mezcla de divisas en stats
                     "pnl_eur": round(pnl_eur, 2), "reason": exit_reason,
                     "entry_score": pos.get("entry_score"), "hours_held": round(hours_held, 1),
                     "trailing_active": trailing_active, "trailing_pct": trailing_pct,
@@ -115,8 +131,8 @@ def run_trading(market_data):
                 storage.remove_open_position(ticker)
                 if needs_cooldown:
                     storage.set_cooldown(ticker, (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
-                threading.Thread(target=alpaca_api.place_order, args=(ticker, "sell", 0), daemon=True).start()
-                threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR"), daemon=True).start()
+                _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
+                _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR")
             else:
                 storage.update_open_position(ticker, {
                     "current_price": round(current_price, 2), "peak_price": round(peak_price, 4),
@@ -186,12 +202,11 @@ def run_trading(market_data):
             capital -= position_size
             open_tickers.add(ticker)
             if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
-                threading.Thread(target=alpaca_api.place_order, args=(ticker, "buy", notional_usd), daemon=True).start()
-            threading.Thread(
-                target=telegram_alerts.alert_trade_open,
-                args=(ticker, row["name"], score, native_price, currency),
-                daemon=True,
-            ).start()
+                _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
+            _tg_pool.submit(
+                telegram_alerts.alert_trade_open,
+                ticker, row["name"], score, native_price, currency,
+            )
 
         # Equity log
         positions = storage.get_open_positions()
@@ -221,7 +236,6 @@ def sell_manual(ticker, market_data):
         currency = pos.get("currency", "EUR")
         current_price = _to_native(row["price"], currency) if row else pos["entry_price"]
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
-        pnl = pos["shares"] * (current_price - pos["entry_price"])
         eur_exit_price  = row["price"] if row else _to_eur(current_price, currency)
         eur_entry_price = _to_eur(pos["entry_price"], currency)
         pnl_eur = pos["shares"] * (eur_exit_price - eur_entry_price)
@@ -233,14 +247,16 @@ def sell_manual(ticker, market_data):
             "entry_price": pos["entry_price"], "exit_price": round(current_price, 2),
             "peak_price": round(pos.get("peak_price", pos["entry_price"]), 2),
             "currency": currency, "shares": pos["shares"],
-            "ret_pct": round(ret_pct, 2), "pnl": round(pnl, 2), "pnl_eur": round(pnl_eur, 2),
+            "ret_pct": round(ret_pct, 2),
+            "pnl": round(pnl_eur, 2),      # siempre en EUR — evita mezcla de divisas en stats
+            "pnl_eur": round(pnl_eur, 2),
             "reason": "Venta manual", "entry_score": pos.get("entry_score"),
             "hours_held": pos.get("hours_held"), "trailing_active": pos.get("trailing_active", False),
             "trailing_pct": pos.get("trailing_pct"),
         })
         storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
-        threading.Thread(target=alpaca_api.place_order, args=(ticker, "sell", 0), daemon=True).start()
-        threading.Thread(target=telegram_alerts.alert_trade_close, args=(ticker, pos.get("name", ""), round(ret_pct, 2), round(pnl_eur, 2), "Venta manual", "EUR"), daemon=True).start()
+        _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
+        _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name", ""), round(ret_pct, 2), round(pnl_eur, 2), "Venta manual", "EUR")
     return {"status": "sold", "cooldown_hours": 48}
 
 def reset():
