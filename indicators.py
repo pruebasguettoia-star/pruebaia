@@ -62,6 +62,7 @@ def get_fundamentals(ticker):
             return c["pe"], c["div"], c.get("beta")
 
     pe_ratio = div_yield = beta = None
+    full = None
     try:
         t = yf.Ticker(ticker)
         info = t.fast_info
@@ -82,7 +83,7 @@ def get_fundamentals(ticker):
         pass
 
     try:
-        if 'full' not in dir():
+        if full is None:
             full = yf.Ticker(ticker).info
         beta_raw = full.get("beta")
         if beta_raw is not None and math.isfinite(float(beta_raw)):
@@ -184,13 +185,12 @@ def calc_atr_pct(ticker):
         high = hist["High"]
         low  = hist["Low"]
         close = hist["Close"]
-        # True Range
+        # True Range (vectorizado — evita el bucle iloc que era incorrecto y lento)
+        import pandas as pd
         tr1 = high - low
         tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = tr1.copy()
-        for i in range(len(tr)):
-            tr.iloc[i] = max(tr1.iloc[i], tr2.iloc[i], tr3.iloc[i])
+        tr3 = (low  - close.shift(1)).abs()
+        tr  = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = float(tr.rolling(14).mean().iloc[-1])
         price = float(close.iloc[-1])
         if price > 0 and math.isfinite(atr):

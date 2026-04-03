@@ -79,7 +79,7 @@ def run_trading(market_data):
             take_profit  = MOM_TAKE_PROFIT if is_mom_trade else PAPER2_TAKE_PROFIT
             trailing_min = MOM_TRAILING_MIN if is_mom_trade else PAPER2_TRAILING_MIN
 
-            if not trailing_active and ret_pct >= take_profit:
+            if not trailing_active and ret_pct > take_profit:
                 trailing_active = True; peak_price = current_price
             if ret_pct <= PAPER2_STOP_LOSS:
                 exit_reason = f"Stop loss {ret_pct:.1f}%"; needs_cooldown = True
@@ -165,13 +165,15 @@ def run_trading(market_data):
             else:
                 native_price = row["price"]; currency = "EUR"
 
-            shares       = position_size / row["price"]
+            # shares se calcula sobre el precio nativo para que el P&L
+            # (shares × Δnative) sea consistente con la divisa de entry_price.
+            # position_size está en EUR → convertimos al nativo antes de dividir.
+            native_position_size = position_size / fx if (currency == "USD" and fx > 0) else position_size
+            shares       = native_position_size / native_price if native_price > 0 else 0
             notional_usd = position_size / fx if fx > 0 else position_size
             trailing_pct_entry = get_trailing_pct(ticker)
 
-            storage.sub_capital(position_size)
-            capital -= position_size
-            storage.add_open_position({
+            storage.atomic_open_position({
                 "ticker": ticker, "name": row["name"], "entry_date": now_str,
                 "entry_price": native_price, "current_price": native_price,
                 "peak_price": native_price, "currency": currency,
@@ -180,7 +182,8 @@ def run_trading(market_data):
                 "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
                 "entry_score": score, "score": score, "waiting_recovery": False,
                 "trade_mode": trade_mode,
-            })
+            }, cost_eur=position_size)
+            capital -= position_size
             open_tickers.add(ticker)
             if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                 threading.Thread(target=alpaca_api.place_order, args=(ticker, "buy", notional_usd), daemon=True).start()
@@ -262,6 +265,9 @@ def get_read_only_state(market_data):
         current_price = _to_native(row["price"], currency)
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
         peak_price = pos.get("peak_price", pos["entry_price"])
+        # Actualizar peak en la vista (no persiste, solo para mostrar trailing correcto)
+        if current_price > peak_price:
+            peak_price = current_price
         trailing_drop = (current_price - peak_price) / peak_price * 100 if peak_price > 0 else 0
         pos["current_price"] = round(current_price, 2)
         pos["ret_pct"] = round(ret_pct, 2)

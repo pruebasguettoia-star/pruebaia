@@ -23,7 +23,7 @@ def place_order(ticker, side, notional_usd):
         print(f"[alpaca] {ticker} no operable en Alpaca — omitiendo")
         return None
     try:
-        payload = {"symbol": ticker, "side": side, "type": "market", "time_in_force": "day"}
+        payload = {"symbol": ticker, "side": side, "type": "market", "time_in_force": "gtc"}
         if side == "buy":
             existing = get_position_qty(ticker)
             if existing is not None and float(existing) > 0:

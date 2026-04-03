@@ -150,7 +150,30 @@ def get_open_positions():
     return [_row_to_dict(r) for r in rows]
 
 
-def add_open_position(pos):
+def atomic_open_position(pos, cost_eur):
+    """Resta capital y añade posición en una sola transacción — evita estado corrupto."""
+    conn = _conn()
+    conn.execute("UPDATE state SET capital = capital - ? WHERE id=1", (round(cost_eur, 6),))
+    conn.execute("""
+        INSERT INTO open_pos (ticker, name, entry_date, entry_price, current_price,
+            peak_price, currency, shares, ret_pct, trailing_drop, trailing_active,
+            trailing_pct, hours_held, hours_left, entry_score, score, waiting_recovery,
+            trade_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        pos["ticker"], pos.get("name"), pos["entry_date"], pos["entry_price"],
+        pos.get("current_price", pos["entry_price"]), pos.get("peak_price", pos["entry_price"]),
+        pos.get("currency", "EUR"), pos["shares"], pos.get("ret_pct", 0),
+        pos.get("trailing_drop", 0), int(pos.get("trailing_active", False)),
+        pos.get("trailing_pct", 2.0), pos.get("hours_held", 0),
+        pos.get("hours_left", 24), pos.get("entry_score"), pos.get("score"),
+        int(pos.get("waiting_recovery", False)),
+        pos.get("trade_mode", "dip_buying"),
+    ))
+    conn.commit()
+
+
+
     _conn().execute("""
         INSERT INTO open_pos (ticker, name, entry_date, entry_price, current_price,
             peak_price, currency, shares, ret_pct, trailing_drop, trailing_active,
@@ -298,6 +321,17 @@ def get_performance_stats():
 # ── EQUITY LOG ────────────────────────────────────────────────────────────────
 def add_equity_snapshot(equity):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Throttle: solo un snapshot por hora para reducir escrituras en Railway
+    last = _conn().execute(
+        "SELECT date FROM equity_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if last:
+        try:
+            last_dt = datetime.strptime(last["date"], "%Y-%m-%d %H:%M")
+            if (datetime.now() - last_dt).total_seconds() < 3600:
+                return  # Ya hay un snapshot reciente — omitir
+        except Exception:
+            pass
     _conn().execute("INSERT INTO equity_log (date, equity) VALUES (?, ?)", (now_str, round(equity, 2)))
     # Mantener solo últimos 2000 registros
     _conn().execute("""

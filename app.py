@@ -45,6 +45,10 @@ except ImportError:
 if alpaca_enabled():
     print(f"[boot] Alpaca activado — {alpaca_url()}")
 
+from config import ADMIN_TOKEN as _ADMIN_TOKEN
+if not _ADMIN_TOKEN:
+    print("[auth] AVISO: ADMIN_TOKEN no configurado — endpoints admin bloqueados (añádelo en Railway Variables)")
+
 # ── RW LOCK para cache (fix #6) ──────────────────────────────────────────────
 # Permite lecturas concurrentes, escritura exclusiva
 class RWLock:
@@ -75,6 +79,7 @@ class RWLock:
 cache = {"data": None, "last_updated": None, "last_refresh_ts": None}
 cache_lock = RWLock()
 alerted = set()
+alerted_lock = threading.Lock()          # protege el set alerted (thread-safe)
 _refresh_lock = threading.Lock()  # evita ejecuciones concurrentes de refresh_data
 
 # ── EMAIL with retry ─────────────────────────────────────────────────────────
@@ -146,7 +151,7 @@ def refresh_data():
 
         all_tasks = [(g, name, ticker) for g, tickers in GROUPS.items() for name, ticker in tickers]
         row_map = {}
-        with ThreadPoolExecutor(max_workers=4) as ex:
+        with ThreadPoolExecutor(max_workers=10) as ex:
             futures = {ex.submit(indicators.fetch_ticker, name, ticker): (g, ticker) for g, name, ticker in all_tasks}
             for fut in as_completed(futures):
                 g, ticker = futures[fut]
@@ -162,11 +167,12 @@ def refresh_data():
             if ticker in row_map:
                 _, row = row_map[ticker]
                 result[g].append(row)
-                if row["signal"] == "strong_buy" and ticker not in alerted:
-                    strong_buys.append(row)
-                    alerted.add(ticker)
-                elif row["signal"] != "strong_buy" and ticker in alerted:
-                    alerted.discard(ticker)
+                with alerted_lock:
+                    if row["signal"] == "strong_buy" and ticker not in alerted:
+                        strong_buys.append(row)
+                        alerted.add(ticker)
+                    elif row["signal"] != "strong_buy" and ticker in alerted:
+                        alerted.discard(ticker)
 
         cache_lock.write_acquire()
         try:
