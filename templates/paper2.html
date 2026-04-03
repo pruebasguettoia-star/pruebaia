@@ -523,7 +523,7 @@ function loadData(){
           '<td>'+sym+p.current_price+'</td>'+
           '<td class="'+cc(p.ret_pct)+'">'+fmt(p.ret_pct)+'</td>'+
           '<td>'+trailingHtml+'</td>'+
-          '<td>'+timerBar(p.hours_left, d.hold_hours, p.waiting_recovery, p.trailing_active)+'</td>'+
+          '<td>'+timerBar(p.hours_left, p.trade_mode==='momentum'?d.mom_hold_hours:d.hold_hours, p.waiting_recovery, p.trailing_active)+'</td>'+
           '<td><button class="btn-sell" onclick="sellPosition(\''+p.ticker+'\',this)">Vender</button></td>'+
         '</tr>';
       }).join("");
@@ -554,7 +554,7 @@ function loadData(){
           '<td>'+peakHtml+'</td>'+
           '<td>'+sym+t.exit_price+'</td>'+
           '<td class="'+cls+'">'+fmt(t.ret_pct)+'</td>'+
-          '<td class="'+cls+'">'+(t.pnl>=0?"+":"")+sym+Math.abs(t.pnl).toFixed(0)+'</td>'+
+          '<td class="'+cls+'">'+(t.pnl_eur>=0?"+":"")+'€'+Math.abs(t.pnl_eur).toFixed(0)+'</td>'+
           '<td class="muted" style="font-size:10px;color:'+reasonCol+'">'+t.reason+'</td>'+
         '</tr>';
       }).join("");
@@ -615,7 +615,7 @@ function loadData(){
             '<div class="p2-card-row2">'+
               '<span class="p2-card-pill">Score '+scorePill(t.entry_score)+'</span>'+
               '<span class="p2-card-pill">'+modeTagC+'</span>'+
-              '<span class="p2-card-pill '+cls+'">'+(t.pnl>=0?'+':'')+sym+Math.abs(t.pnl).toFixed(0)+'</span>'+
+              '<span class="p2-card-pill '+cls+'">'+(t.pnl_eur>=0?'+':'')+'€'+Math.abs(t.pnl_eur).toFixed(0)+'</span>'+
               '<span class="p2-card-pill" style="color:'+reasonCol+'">'+t.reason+'</span>'+
               '<span class="p2-card-pill muted">'+t.hours_held+'h</span>'+
             '</div>'+
