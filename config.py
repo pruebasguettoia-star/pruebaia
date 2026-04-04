@@ -94,6 +94,26 @@ PYRA_MIN_SCORE    = 85     # score mínimo en el momento de añadir
 PYRA_SIZE_PCT     = 0.05   # 5% del capital por pyramid (mitad de la entrada inicial)
 PYRA_MAX_PER_POS  = 1      # máximo 1 pyramid por posición
 
+# ── POSITION SIZE FIJO SOBRE CAPITAL INICIAL ──────────────────────────────────
+# True = siempre usar PAPER2_INITIAL_CAP como base (1.000€ fijos al 10%)
+# False = usar capital disponible (se reduce con posiciones abiertas)
+# Las entradas tardías en un crash son las mejores — no deben ser irrisoriamente pequeñas
+POS_SIZE_ON_INITIAL_CAP = True
+
+# ── SALIDA ANTICIPADA DINÁMICA ────────────────────────────────────────────────
+# Si antes de cumplir hold_hours el trade tiene beneficio Y el score ha bajado,
+# salir sin esperar — libera capital para nuevas señales
+EARLY_EXIT_ENABLED   = True
+EARLY_EXIT_MIN_HOURS = 8.0    # no salir antes de 8h
+EARLY_EXIT_MIN_RET   = 3.0    # ret mínimo para salida anticipada
+EARLY_EXIT_MAX_SCORE = 80     # salir si score cayó por debajo de este umbral
+
+# ── LIBERACIÓN ANTICIPADA DE COOLDOWN ────────────────────────────────────────
+# Si el ticker en cooldown de trailing (24h) tiene score >=85 tras 12h,
+# liberarlo para no perder señales buenas
+COOLDOWN_EARLY_CHECK_HOURS = 12    # revisar tras N horas de cooldown trailing
+COOLDOWN_EARLY_MIN_SCORE   = 85    # score mínimo para liberación anticipada
+
 # ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
 # Stop loss = fallo real → 48h cooldown
 # Trailing stop / score / tiempo = salida técnica correcta → 24h cooldown

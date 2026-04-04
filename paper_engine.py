@@ -21,6 +21,9 @@ from config import (
     POS_PCT_LOW_VOL, POS_PCT_MED_VOL, POS_PCT_HIGH_VOL,
     PARTIAL_SELL_ENABLED, PARTIAL_SELL_PCT,
     NON_TRADEABLE,
+    POS_SIZE_ON_INITIAL_CAP,
+    EARLY_EXIT_ENABLED, EARLY_EXIT_MIN_HOURS, EARLY_EXIT_MIN_RET, EARLY_EXIT_MAX_SCORE,
+    COOLDOWN_EARLY_CHECK_HOURS, COOLDOWN_EARLY_MIN_SCORE,
 )
 from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, is_momentum_candidate, calc_atr_pct
 import alpaca_api
@@ -188,6 +191,16 @@ def run_trading(market_data):
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
             elif trailing_active and current_score is not None and current_score < PAPER2_MIN_SCORE:
                 exit_reason = f"Score bajó a {current_score}"
+            # ── Salida anticipada dinámica ────────────────────────────────────
+            # Si el score cayó y ya hay beneficio suficiente, no esperar a hold_hours
+            # Libera capital para nuevas señales mejores
+            elif (EARLY_EXIT_ENABLED
+                  and not trailing_active
+                  and hours_held >= EARLY_EXIT_MIN_HOURS
+                  and ret_pct >= EARLY_EXIT_MIN_RET
+                  and current_score is not None
+                  and current_score < EARLY_EXIT_MAX_SCORE):
+                exit_reason = f"Salida anticipada: ret {ret_pct:.1f}% con score {current_score} < {EARLY_EXIT_MAX_SCORE}"
             elif hours_held >= hold_hours:
                 if ret_pct >= 0:
                     if current_score is not None and current_score >= PAPER2_MIN_SCORE:
@@ -266,23 +279,50 @@ def run_trading(market_data):
 
         # ── Régimen de mercado ─────────────────────────────────────────────────
         regime_info = get_spy_regime()
-        regime      = regime_info.get("regime", "dip_buying")  # "momentum" | "dip_buying"
+        regime      = regime_info.get("regime", "dip_buying")
+
+        # ── Liberación anticipada de cooldowns por score ───────────────────────
+        # Si un ticker en cooldown de trailing (24h) ya tiene score >=85 tras 12h,
+        # liberarlo para no perder la señal
+        now_dt_check = datetime.now()
+        all_cooldowns = storage.get_cooldowns_with_start()
+        for cd_ticker, until_str in list(all_cooldowns.items()):
+            try:
+                until_dt = datetime.strptime(until_str, "%Y-%m-%d %H:%M")
+                # Estimar inicio del cooldown: until - COOLDOWN_TRAILING_HOURS
+                start_dt = until_dt - timedelta(hours=COOLDOWN_TRAILING_HOURS)
+                hours_in_cooldown = (now_dt_check - start_dt).total_seconds() / 3600
+                if hours_in_cooldown < COOLDOWN_EARLY_CHECK_HOURS:
+                    continue  # demasiado pronto para revisar
+                # Solo liberar cooldowns de trailing (duración == COOLDOWN_TRAILING_HOURS)
+                total_cooldown = (until_dt - start_dt).total_seconds() / 3600
+                if abs(total_cooldown - COOLDOWN_TRAILING_HOURS) > 1:
+                    continue  # es un cooldown de stop loss (48h) — no tocar
+                # Comprobar score actual del ticker en el cache de mercado
+                cd_row = ticker_map.get(cd_ticker)
+                if cd_row and cd_row.get("inv_score", 0) >= COOLDOWN_EARLY_MIN_SCORE:
+                    storage.remove_cooldown(cd_ticker)
+                    print(f"[cooldown] {cd_ticker} liberado anticipadamente — score {cd_row['inv_score']} >= {COOLDOWN_EARLY_MIN_SCORE}")
+            except Exception:
+                continue
 
         # Nuevas entradas — modo dual
         cooldowns    = storage.get_cooldowns()
         open_tickers = storage.get_open_tickers()
         capital      = storage.get_capital()
 
+        # Base para position sizing: capital inicial fijo (evita shrinkage)
+        # o capital disponible si POS_SIZE_ON_INITIAL_CAP=False
+        pos_base = PAPER2_INITIAL_CAP if POS_SIZE_ON_INITIAL_CAP else capital
+
         for ticker, row in ticker_map.items():
-            if ticker in NON_TRADEABLE: continue          # excluir no operables
+            if ticker in NON_TRADEABLE: continue
             if ticker in cooldowns or ticker in open_tickers: continue
             if not is_market_open(ticker): continue
 
             score = row.get("inv_score")
 
-            # ── Modo DIP-BUYING (siempre activo) ──────────────────────────────
             is_dip  = score is not None and score >= PAPER2_MIN_SCORE
-            # ── Modo MOMENTUM (solo cuando SPY y URTH > SMA50) ───────────────
             is_mom  = regime == "momentum" and is_momentum_candidate(row)
 
             if not is_dip and not is_mom:
@@ -291,10 +331,7 @@ def run_trading(market_data):
             trade_mode = "dip_buying" if is_dip else "momentum"
 
             # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
-            # Vol baja  (ATR ≤ 1.5%): 13% — activos estables como SHY, AGG, XLP
-            # Vol media (ATR ≤ 3.0%): 10% — estándar
-            # Vol alta  (ATR >  3.0%): 7% — COIN, TSLA, ARKK, etc.
-            atr_entry = calc_atr_pct(ticker)   # ya cacheado
+            atr_entry = calc_atr_pct(ticker)
             if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
                 pos_pct = POS_PCT_LOW_VOL
             elif atr_entry is not None and atr_entry <= POS_VOL_MED_ATR:
@@ -302,8 +339,11 @@ def run_trading(market_data):
             else:
                 pos_pct = POS_PCT_HIGH_VOL
 
-            position_size = capital * pos_pct
-            if position_size < 1: continue
+            # Tamaño fijo sobre capital inicial — no se reduce con posiciones abiertas
+            position_size = pos_base * pos_pct
+            # Guard: no entrar si no hay capital real suficiente
+            if position_size < 1 or capital < position_size:
+                continue
 
             fx = get_eurusd()
             if ticker in ALPACA_TRADEABLE and fx > 0:

@@ -450,6 +450,20 @@ def clean_expired_cooldowns():
     _conn().commit()
 
 
+def get_cooldowns_with_start():
+    """Devuelve cooldowns con su fecha de inicio estimada (until - COOLDOWN_TRAILING_HOURS).
+    Usado para liberación anticipada cuando el score del ticker vuelve a ser alto.
+    """
+    rows = _conn().execute("SELECT ticker, until_date FROM cooldowns").fetchall()
+    return {r["ticker"]: r["until_date"] for r in rows}
+
+
+def remove_cooldown(ticker):
+    """Elimina el cooldown de un ticker (liberación anticipada)."""
+    _conn().execute("DELETE FROM cooldowns WHERE ticker=?", (ticker,))
+    _conn().commit()
+
+
 # ── RESET ─────────────────────────────────────────────────────────────────────
 def reset_all():
     conn = _conn()
