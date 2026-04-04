@@ -78,7 +78,8 @@ def init_db():
             entry_score INTEGER,
             score INTEGER,
             waiting_recovery INTEGER DEFAULT 0,
-            trade_mode TEXT DEFAULT 'dip_buying'
+            trade_mode TEXT DEFAULT 'dip_buying',
+            pyramid_count INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS closed_pos (
@@ -120,7 +121,13 @@ def init_db():
         conn.commit()
         print("[storage] columna trade_mode añadida a open_pos")
     except Exception:
-        pass  # La columna ya existe — normal en DB nueva o ya migrada
+        pass
+    try:
+        conn.execute("ALTER TABLE open_pos ADD COLUMN pyramid_count INTEGER DEFAULT 0")
+        conn.commit()
+        print("[storage] columna pyramid_count añadida a open_pos")
+    except Exception:
+        pass
     print(f"[storage] SQLite inicializado: {DB_PATH}")
 
 
@@ -160,8 +167,8 @@ def atomic_open_position(pos, cost_eur):
         INSERT INTO open_pos (ticker, name, entry_date, entry_price, current_price,
             peak_price, currency, shares, ret_pct, trailing_drop, trailing_active,
             trailing_pct, hours_held, hours_left, entry_score, score, waiting_recovery,
-            trade_mode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trade_mode, pyramid_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         pos["ticker"], pos.get("name"), pos["entry_date"], pos["entry_price"],
         pos.get("current_price", pos["entry_price"]), pos.get("peak_price", pos["entry_price"]),
@@ -171,6 +178,7 @@ def atomic_open_position(pos, cost_eur):
         pos.get("hours_left", 24), pos.get("entry_score"), pos.get("score"),
         int(pos.get("waiting_recovery", False)),
         pos.get("trade_mode", "dip_buying"),
+        int(pos.get("pyramid_count", 0)),
     ))
     conn.commit()
 
@@ -195,7 +203,22 @@ def atomic_open_position(pos, cost_eur):
     _conn().commit()
 
 
-def update_open_position(ticker, updates):
+def atomic_pyramid(ticker, extra_shares, cost_eur):
+    """Añade shares a una posición existente (pyramiding) y resta capital.
+    Todo en una sola transacción para evitar estado inconsistente.
+    """
+    conn = _conn()
+    conn.execute("UPDATE state SET capital = capital - ? WHERE id=1", (round(cost_eur, 6),))
+    conn.execute("""
+        UPDATE open_pos
+        SET shares = shares + ?,
+            pyramid_count = pyramid_count + 1
+        WHERE ticker = ?
+    """, (round(extra_shares, 6), ticker))
+    conn.commit()
+
+
+
     """Actualiza campos de una posición abierta por ticker."""
     if not updates:
         return

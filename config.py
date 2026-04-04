@@ -60,6 +60,40 @@ PAPER2_TAKE_PROFIT  = 5.0
 PAPER2_TRAILING_MIN = 3.0
 PAPER2_MAX_HOURS    = 48.0
 
+# ── TRAILING DINÁMICO POR RÉGIMEN ─────────────────────────────────────────────
+# En bull tranquilo (BULL_QUIET) activamos el trailing más tarde para dejar
+# correr tendencias. En pánico lo activamos antes para proteger ganancias.
+TAKE_PROFIT_BY_REGIME = {
+    "BULL_QUIET":    8.0,   # activa trailing en +8% — deja correr tendencias
+    "BULL_VOLATILE": 5.0,   # igual que antes
+    "BEAR_MODERATE": 4.0,   # más conservador
+    "BEAR_PANIC":    3.0,   # protección agresiva
+}
+
+# ── STOP DINÁMICO POR ATR ────────────────────────────────────────────────────
+# Stop = ATR_STOP_MULT × ATR%, entre STOP_MIN y STOP_MAX
+# Reemplaza el stop fijo de -7% para todos los activos
+ATR_STOP_MULT = 2.5        # multiplicador ATR para stop
+ATR_STOP_MIN  = 5.0        # stop mínimo (activos muy estables: SHY, AGG)
+ATR_STOP_MAX  = 10.0       # stop máximo (activos muy volátiles: COIN, ARKK)
+
+# ── EXTENSIÓN DE HOLD POR SCORE ──────────────────────────────────────────────
+# Si a las HOLD_HOURS el score sube a ≥HOLD_EXT_SCORE y ret>HOLD_EXT_RET_PCT,
+# extender el hold máximo a HOLD_EXT_MAX_HOURS (en vez de MAX_HOURS)
+HOLD_EXT_SCORE     = 88     # score mínimo para extensión
+HOLD_EXT_RET_PCT   = 3.0   # ret mínimo en % para extensión
+HOLD_EXT_MAX_HOURS = 72.0  # hold máximo extendido
+
+# ── PYRAMIDING ───────────────────────────────────────────────────────────────
+# Si una posición lleva ≥PYRA_MIN_RET% y ≥PYRA_MIN_HOURS,
+# y el score sigue ≥PYRA_MIN_SCORE, añadir una segunda entrada de PYRA_SIZE_PCT
+PYRA_ENABLED      = True
+PYRA_MIN_RET      = 3.0    # ret mínimo para activar pyramiding
+PYRA_MIN_HOURS    = 8.0    # horas mínimas en posición antes de añadir
+PYRA_MIN_SCORE    = 85     # score mínimo en el momento de añadir
+PYRA_SIZE_PCT     = 0.05   # 5% del capital por pyramid (mitad de la entrada inicial)
+PYRA_MAX_PER_POS  = 1      # máximo 1 pyramid por posición
+
 # ── MOMENTUM MODE — parámetros diferenciados ──────────────────────────────────
 # Hold más largo para que la tendencia se desarrolle,
 # pero trailing más agresivo para asegurar ganancias antes
@@ -85,8 +119,23 @@ GROUPS = {
         ("Amazon","AMZN"),("Meta","META"),("Tesla","TSLA"),
     ],
     "US STOCKS": [
-        ("AMD","AMD"),("Bank of America","BAC"),("Coinbase","COIN"),
-        ("JPMorgan","JPM"),("Netflix","NFLX"),("Palantir","PLTR"),
+        # Tecnología
+        ("AMD","AMD"),("Broadcom","AVGO"),("Qualcomm","QCOM"),("Applied Materials","AMAT"),
+        ("Salesforce","CRM"),("Adobe","ADBE"),("ServiceNow","NOW"),
+        # Financieros
+        ("Bank of America","BAC"),("JPMorgan","JPM"),("Goldman Sachs","GS"),
+        ("Morgan Stanley","MS"),("Visa","V"),("Mastercard","MA"),
+        # Salud / Biotech
+        ("UnitedHealth","UNH"),("Eli Lilly","LLY"),("AbbVie","ABBV"),
+        ("Moderna","MRNA"),("Intuitive Surgical","ISRG"),
+        # Consumo / Retail
+        ("Netflix","NFLX"),("Booking Holdings","BKNG"),("Costco","COST"),
+        # Energía
+        ("ExxonMobil","XOM"),("Chevron","CVX"),("EOG Resources","EOG"),
+        # Industrial / Defensa
+        ("Caterpillar","CAT"),("Deere","DE"),("RTX Corp","RTX"),
+        # Cripto / Fintech / Otros
+        ("Coinbase","COIN"),("Palantir","PLTR"),("Robinhood","HOOD"),
     ],
     "US SECTORS": [
         ("Technology","XLK"),("Healthcare","XLV"),("Financials","XLF"),
@@ -132,21 +181,39 @@ GROUPS = {
 USD_TICKERS = {
     "URTH","EEM","IWM","RSP","SPY","QQQ",
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
-    "AMD","BAC","COIN","JPM","NFLX","PLTR",
+    # US STOCKS expanded
+    "AMD","AVGO","QCOM","AMAT","CRM","ADBE","NOW",
+    "BAC","JPM","GS","MS","V","MA",
+    "UNH","LLY","ABBV","MRNA","ISRG",
+    "NFLX","BKNG","COST",
+    "XOM","CVX","EOG",
+    "CAT","DE","RTX",
+    "COIN","PLTR","HOOD",
+    # Sectores US
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
+    # Bonos
     "TLT","SHY","AGG","HYG","TIP",
-    # Nota: futuros (BZ=F, CL=F, NG=F, ZW=F) y divisas (EURUSD=X, etc.) se excluyen
-    # deliberadamente — sus precios ya son en USD/unidad de contrato y no deben
-    # convertirse a EUR (distorsionaría el precio mostrado)
+    # Metales y minería
     "GLD","SLV","PPLT","GDX","GDXJ","SILJ","COPX","XME","NEM","FCX","AG","GOLD",
+    # Temáticos
     "ARKK","IBB","SOXX","KRE",
+    # Internacional USD-listed
     "EWY","MCHI","EWT","VNM","EWZ","EWW","ARGT","ECH","EPU",
     "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",
+    # Nota: futuros y divisas excluidos deliberadamente
 }
 
 ALPACA_TRADEABLE = {
     "NVDA","AAPL","GOOGL","MSFT","AMZN","META","TSLA",
-    "AMD","BAC","COIN","JPM","NFLX","PLTR",
+    # US STOCKS expanded
+    "AMD","AVGO","QCOM","AMAT","CRM","ADBE","NOW",
+    "BAC","JPM","GS","MS","V","MA",
+    "UNH","LLY","ABBV","MRNA","ISRG",
+    "NFLX","BKNG","COST",
+    "XOM","CVX","EOG",
+    "CAT","DE","RTX",
+    "COIN","PLTR","HOOD",
+    # ETFs
     "XLK","XLV","XLF","XLY","XLC","XLI","XLP","XLE","XLU","XLRE","XLB",
     "TLT","SHY","AGG","HYG","TIP",
     "URTH","EEM","IWM","RSP","SPY","QQQ",

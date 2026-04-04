@@ -12,8 +12,12 @@ from config import (
     PAPER2_TRAILING_MIN, PAPER2_MAX_HOURS,
     MOM_HOLD_HOURS, MOM_MAX_HOURS, MOM_TAKE_PROFIT, MOM_TRAILING_MIN,
     ALPACA_TRADEABLE, EU_TICKERS, FUTURES_TICKERS,
+    TAKE_PROFIT_BY_REGIME, ATR_STOP_MULT, ATR_STOP_MIN, ATR_STOP_MAX,
+    HOLD_EXT_SCORE, HOLD_EXT_RET_PCT, HOLD_EXT_MAX_HOURS,
+    PYRA_ENABLED, PYRA_MIN_RET, PYRA_MIN_HOURS, PYRA_MIN_SCORE,
+    PYRA_SIZE_PCT, PYRA_MAX_PER_POS,
 )
-from indicators import get_eurusd, get_trailing_pct, get_spy_regime, is_momentum_candidate
+from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, is_momentum_candidate, calc_atr_pct
 import alpaca_api
 import storage
 import telegram_alerts
@@ -87,18 +91,42 @@ def run_trading(market_data):
             exit_reason = None
             needs_cooldown = False
             trailing_active = bool(pos.get("trailing_active", False))
+            pyramid_count = int(pos.get("pyramid_count", 0))
 
             # ── Parámetros según modo ─────────────────────────────────────────
             is_mom_trade = pos.get("trade_mode") == "momentum"
             hold_hours   = MOM_HOLD_HOURS  if is_mom_trade else PAPER2_HOLD_HOURS
-            max_hours    = MOM_MAX_HOURS   if is_mom_trade else PAPER2_MAX_HOURS
-            take_profit  = MOM_TAKE_PROFIT if is_mom_trade else PAPER2_TAKE_PROFIT
             trailing_min = MOM_TRAILING_MIN if is_mom_trade else PAPER2_TRAILING_MIN
 
+            # ── Stop dinámico por ATR ─────────────────────────────────────────
+            # Reemplaza el stop fijo -7% — adapta el riesgo a la volatilidad real
+            atr_pct = calc_atr_pct(ticker)   # ya cacheado desde fetch_ticker
+            if atr_pct is not None:
+                dynamic_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ATR_STOP_MULT * atr_pct)), 2)
+            else:
+                dynamic_stop = PAPER2_STOP_LOSS  # fallback al stop fijo
+
+            # ── Trailing dinámico por régimen ─────────────────────────────────
+            # BULL_QUIET activa el trailing más tarde para dejar correr tendencias
+            if is_mom_trade:
+                take_profit = MOM_TAKE_PROFIT
+            else:
+                scoring_regime = get_market_regime()
+                take_profit = TAKE_PROFIT_BY_REGIME.get(scoring_regime, PAPER2_TAKE_PROFIT)
+
+            # ── Hold máximo: extensión por score ─────────────────────────────
+            # Si a las hold_hours el score es alto y hay beneficio, extender max
+            if (current_score is not None and current_score >= HOLD_EXT_SCORE
+                    and ret_pct >= HOLD_EXT_RET_PCT and not is_mom_trade):
+                max_hours = HOLD_EXT_MAX_HOURS
+            else:
+                max_hours = MOM_MAX_HOURS if is_mom_trade else PAPER2_MAX_HOURS
+
+            # ── Lógica de salida ──────────────────────────────────────────────
             if not trailing_active and ret_pct > take_profit:
                 trailing_active = True; peak_price = current_price
-            if ret_pct <= PAPER2_STOP_LOSS:
-                exit_reason = f"Stop loss {ret_pct:.1f}%"; needs_cooldown = True
+            if ret_pct <= dynamic_stop:
+                exit_reason = f"Stop loss {ret_pct:.1f}% (ATR stop {dynamic_stop:.1f}%)"; needs_cooldown = True
             elif trailing_active and trailing_drop <= -trailing_pct:
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
             elif trailing_active and current_score is not None and current_score < PAPER2_MIN_SCORE:
@@ -123,7 +151,7 @@ def run_trading(market_data):
                     "entry_price": pos["entry_price"], "exit_price": round(current_price, 2),
                     "peak_price": round(peak_price, 2), "currency": currency,
                     "shares": pos["shares"], "ret_pct": round(ret_pct, 2),
-                    "pnl": round(pnl_eur, 2),        # siempre en EUR — evita mezcla de divisas en stats
+                    "pnl": round(pnl_eur, 2),
                     "pnl_eur": round(pnl_eur, 2), "reason": exit_reason,
                     "entry_score": pos.get("entry_score"), "hours_held": round(hours_held, 1),
                     "trailing_active": trailing_active, "trailing_pct": trailing_pct,
@@ -134,6 +162,39 @@ def run_trading(market_data):
                 _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
                 _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR")
             else:
+                # ── Pyramiding ────────────────────────────────────────────────
+                # Añadir capital cuando la posición confirma momentum alcista
+                capital_now = storage.get_capital()
+                pyra_size = capital_now * PYRA_SIZE_PCT
+                can_pyramid = (
+                    PYRA_ENABLED
+                    and pyramid_count < PYRA_MAX_PER_POS
+                    and ret_pct >= PYRA_MIN_RET
+                    and hours_held >= PYRA_MIN_HOURS
+                    and current_score is not None and current_score >= PYRA_MIN_SCORE
+                    and pyra_size >= 1.0
+                    and not trailing_active   # no pyramidar si ya está en trailing
+                )
+                if can_pyramid:
+                    fx = get_eurusd()
+                    if currency == "USD" and fx > 0:
+                        extra_native_size = pyra_size / fx
+                        extra_shares = extra_native_size / current_price if current_price > 0 else 0
+                    else:
+                        extra_shares = pyra_size / current_price if current_price > 0 else 0
+                    if extra_shares > 0:
+                        storage.atomic_pyramid(ticker, extra_shares, pyra_size)
+                        pyramid_count += 1
+                        notional_usd = pyra_size / fx if (currency == "USD" and fx > 0) else pyra_size
+                        if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
+                            _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
+                        _tg_pool.submit(
+                            telegram_alerts.alert_trade_open,
+                            ticker, pos.get("name",""), current_score,
+                            round(current_price, 2), currency,
+                        )
+                        print(f"[pyra] {ticker} pyramid #{pyramid_count} +{extra_shares:.4f} shares @ {current_price:.2f} ret={ret_pct:.1f}%")
+
                 storage.update_open_position(ticker, {
                     "current_price": round(current_price, 2), "peak_price": round(peak_price, 4),
                     "ret_pct": round(ret_pct, 2), "hours_held": round(hours_held, 1),
@@ -304,7 +365,8 @@ def get_read_only_state(market_data):
     capital = storage.get_capital()
     total_equity = round(capital + open_value, 2)
     total_ret = round((total_equity - PAPER2_INITIAL_CAP) / PAPER2_INITIAL_CAP * 100, 2)
-    regime_info = get_spy_regime()
+    regime_info = dict(get_spy_regime())
+    regime_info["scoring_regime"] = get_market_regime()
     return {
         "capital": round(capital, 2), "open_value": round(open_value, 2),
         "total_equity": total_equity, "total_ret": total_ret, "initial": PAPER2_INITIAL_CAP,

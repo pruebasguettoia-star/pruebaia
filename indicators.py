@@ -216,18 +216,21 @@ def get_trailing_pct(ticker, hist=None):
     trailing = atr_pct * ATR_TRAILING_MULT
     return round(max(ATR_TRAILING_FLOOR, min(ATR_TRAILING_CAP, trailing)), 2)
 
-# ── SPY BENCHMARK — cache unificado (get_spy_returns + get_spy_regime comparten un único fetch) ──
-_spy_unified_cache = {"hist": None, "returns": None, "regime": None, "ts": 0}
+# ── SPY + VIX BENCHMARK — cache unificado ────────────────────────────────────
+# Cubre: get_spy_returns, get_spy_regime, get_market_regime (scoring adaptativo)
+_spy_unified_cache = {"hist": None, "returns": None, "regime": None, "scoring_regime": None, "ts": 0}
 _spy_unified_lock  = threading.Lock()
 _SPY_TTL    = 600   # 10 min — usado por get_spy_returns
-_REGIME_TTL = 900   # 15 min — usado por get_spy_regime
+_REGIME_TTL = 900   # 15 min — usado por get_spy_regime y get_market_regime
 
 
 def _refresh_spy_cache():
-    """Descarga SPY (6mo) y URTH (6mo) una sola vez y rellena returns + regime."""
-    now = time.monotonic()
+    """Descarga SPY (6mo), URTH (6mo) y VIX (1mo) en un solo ciclo.
+    Rellena returns, regime (momentum/dip_buying) y scoring_regime (4 niveles).
+    """
     result = {}
     spy_close = None
+
     for sym in ("SPY", "URTH"):
         try:
             t = yf.Ticker(sym)
@@ -246,7 +249,20 @@ def _refresh_spy_cache():
             print(f"[spy] error {sym}: {e}")
             result[sym] = {"price": None, "sma50": None, "above": None}
 
-    # Returns de SPY a distintos plazos (reutiliza hist ya descargado)
+    # ── VIX — media 5 dias para evitar cambios de regimen por spike puntual ──
+    vix_current = None
+    vix_sma5    = None
+    try:
+        vix_hist = yf.Ticker("^VIX").history(period="1mo", auto_adjust=True)
+        if not vix_hist.empty and len(vix_hist) >= 5:
+            vix_hist.index = vix_hist.index.tz_localize(None) if vix_hist.index.tzinfo else vix_hist.index
+            vix_close   = vix_hist["Close"]
+            vix_current = round(float(vix_close.iloc[-1]), 2)
+            vix_sma5    = round(float(vix_close.rolling(5).mean().iloc[-1]), 2)
+    except Exception as e:
+        print(f"[vix] error: {e}")
+
+    # ── Returns de SPY ────────────────────────────────────────────────────────
     spy_returns = None
     if spy_close is not None and len(spy_close) >= 22:
         price = float(spy_close.iloc[-1])
@@ -257,7 +273,7 @@ def _refresh_spy_cache():
             return None
         spy_returns = {"ret_5d": _ret(5), "ret_14d": _ret(14), "ret_21d": _ret(21), "price": price}
 
-    # Régimen
+    # ── Regimen momentum/dip_buying (usado por paper_engine) ─────────────────
     spy_above  = result.get("SPY",  {}).get("above")
     urth_above = result.get("URTH", {}).get("above")
     if spy_above is True and urth_above is True:
@@ -281,13 +297,28 @@ def _refresh_spy_cache():
         "urth_price":       result.get("URTH", {}).get("price"),
         "urth_sma50":       result.get("URTH", {}).get("sma50"),
         "urth_above_sma50": urth_above,
+        "vix":              vix_current,
+        "vix_sma5":         vix_sma5,
         "note": note,
     }
 
+    # ── Scoring regime — 4 niveles para pesos adaptativos del inv_score ───────
+    # Usa VIX suavizado (sma5) para evitar oscilaciones por spike de 1 dia
+    vix_ref = vix_sma5 if vix_sma5 is not None else vix_current
+    if vix_ref is not None and vix_ref > 30:
+        scoring_regime = "BEAR_PANIC"
+    elif spy_above is False and vix_ref is not None and vix_ref > 18:
+        scoring_regime = "BEAR_MODERATE"
+    elif spy_above is True and (vix_ref is None or vix_ref < 18):
+        scoring_regime = "BULL_QUIET"
+    else:
+        scoring_regime = "BULL_VOLATILE"  # fallback: pesos estandar
+
     with _spy_unified_lock:
-        _spy_unified_cache["returns"] = spy_returns
-        _spy_unified_cache["regime"]  = regime_data
-        _spy_unified_cache["ts"]      = time.monotonic()
+        _spy_unified_cache["returns"]        = spy_returns
+        _spy_unified_cache["regime"]         = regime_data
+        _spy_unified_cache["scoring_regime"] = scoring_regime
+        _spy_unified_cache["ts"]             = time.monotonic()
 
 
 def get_spy_returns():
@@ -303,10 +334,8 @@ def get_spy_returns():
 
 def get_spy_regime():
     """
-    Detecta el régimen de mercado usando SPY y URTH vs su SMA50.
-    Devuelve un dict con regime, spy_price, spy_sma50, urth_price, urth_sma50, note.
-    Criterio: ambos (SPY y URTH) deben estar por encima de su SMA50
-    para activar modo momentum. Si uno falla → dip_buying.
+    Detecta el regimen de mercado usando SPY y URTH vs su SMA50.
+    Devuelve un dict con regime, spy_price, spy_sma50, urth_price, urth_sma50, vix, note.
     Cache compartido con get_spy_returns — un solo fetch cubre ambas funciones.
     """
     now = time.monotonic()
@@ -316,6 +345,20 @@ def get_spy_regime():
     _refresh_spy_cache()
     with _spy_unified_lock:
         return _spy_unified_cache["regime"] or {"regime": "dip_buying", "note": "Sin datos"}
+
+
+def get_market_regime():
+    """Devuelve el scoring_regime actual: BULL_QUIET | BULL_VOLATILE | BEAR_MODERATE | BEAR_PANIC.
+    Cached junto con get_spy_regime. Usado por fetch_ticker para pesos adaptativos.
+    """
+    now = time.monotonic()
+    with _spy_unified_lock:
+        if _spy_unified_cache["scoring_regime"] is not None and (now - _spy_unified_cache["ts"]) < _REGIME_TTL:
+            return _spy_unified_cache["scoring_regime"]
+    _refresh_spy_cache()
+    with _spy_unified_lock:
+        return _spy_unified_cache["scoring_regime"] or "BULL_VOLATILE"
+
 
 
 def is_momentum_candidate(row):
@@ -677,6 +720,53 @@ def fetch_ticker(name, ticker):
         else:
             sc_rel_note = "Sin datos relativos vs SPY (0)"
 
+        # ── Pesos adaptativos por regimen de mercado ──────────────────────────
+        # El umbral de entrada (85) no cambia — cambian los pesos de cada componente.
+        # En BULL_QUIET: BB% y fuerza relativa valen mas (RSI<=30 es raro en bull tranquilo).
+        # En BEAR_PANIC: RSI y divergencia dominan; tendencia y PE casi no aportan.
+        # Los tickers con score>=85 con pesos fijos siempre seguiran activandose.
+        # Solo la zona gris 78-84 puede cruzar el umbral con el regimen correcto.
+        _sr = get_market_regime()
+        if _sr == "BULL_QUIET":
+            # Bull tranquilo (SPY>SMA50, VIX<18): mas senales, enfasis en tecnico suave
+            sc_rsi      = round(sc_rsi      * 1.10)
+            sc_bb       = round(sc_bb       * 1.30)
+            sc_trend    = round(sc_trend    * 1.10)
+            sc_vol      = round(sc_vol      * 1.20)
+            sc_rel      = round(sc_rel      * 1.30)
+            sc_ret1m    = round(sc_ret1m    * 0.90)
+            sc_quality  = round(sc_quality  * 0.85)  # penalizacion de calidad algo menor
+            sc_pe       = round(sc_pe       * 1.10)
+            sc_div_bonus= round(sc_div_bonus* 1.20)
+            _regime_label = "BULL_QUIET"
+        elif _sr == "BEAR_MODERATE":
+            # Correccion/bear temprano (SPY<SMA50, VIX 18-30): mas exigente en RSI y calidad
+            sc_rsi      = round(sc_rsi      * 1.30)
+            sc_bb       = round(sc_bb       * 0.90)
+            sc_trend    = round(sc_trend    * 0.75)
+            sc_vol      = round(sc_vol      * 1.10)
+            sc_rel      = round(sc_rel      * 1.20)
+            sc_ret1m    = round(sc_ret1m    * 1.20)
+            sc_quality  = round(sc_quality  * 1.40)  # filtros de calidad muy estrictos
+            sc_pe       = round(sc_pe       * 0.85)
+            sc_div_bonus= round(sc_div_bonus* 1.30)
+            _regime_label = "BEAR_MODERATE"
+        elif _sr == "BEAR_PANIC":
+            # Panico/crash (VIX>30): solo RSI extremo y divergencia cuentan de verdad
+            sc_rsi      = round(sc_rsi      * 1.50)
+            sc_bb       = round(sc_bb       * 0.80)
+            sc_trend    = round(sc_trend    * 0.55)
+            sc_vol      = round(sc_vol      * 1.40)
+            sc_rel      = round(sc_rel      * 0.75)
+            sc_ret1m    = round(sc_ret1m    * 1.30)
+            sc_quality  = round(sc_quality  * 1.60)  # maxima penalizacion por trampas
+            sc_pe       = round(sc_pe       * 0.65)
+            sc_div_bonus= round(sc_div_bonus* 1.50)
+            _regime_label = "BEAR_PANIC"
+        else:
+            # BULL_VOLATILE (SPY>SMA50, VIX 18-28): pesos estandar — igual que antes
+            _regime_label = "BULL_VOLATILE"
+
         # Total
         inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality + sc_rel
         inv_score = max(1, min(100, inv_score_raw))
@@ -687,6 +777,7 @@ def fetch_ticker(name, ticker):
             "quality": sc_quality_note, "rel": sc_rel_note,
             "pe": sc_pe_note, "dy": sc_dy_note,
             "div":     sc_div_note, "total": inv_score,
+            "regime":  _regime_label,
         }
 
         # Sparkline
@@ -737,8 +828,15 @@ def breakdown_to_str(bd):
         return str(bd)
     sig = bd.get("signal", "")
     label = "★ COMPRA FUERTE" if sig == "strong_buy" else sig.upper()
+    regime = bd.get("regime", "BULL_VOLATILE")
+    regime_icons = {
+        "BULL_QUIET":    "🟢 BULL QUIET (VIX<18)",
+        "BULL_VOLATILE": "🟡 BULL VOLATILE",
+        "BEAR_MODERATE": "🟠 BEAR MODERATE",
+        "BEAR_PANIC":    "🔴 BEAR PANIC (VIX>30)",
+    }
     sep = "─────────────────────"
-    lines = [label, sep]
+    lines = [label, f"Régimen: {regime_icons.get(regime, regime)}", sep]
     for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "rel", "pe", "dy", "div"):
         v = bd.get(k, "")
         if v:
