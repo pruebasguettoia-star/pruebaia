@@ -100,7 +100,8 @@ def init_db():
             entry_score INTEGER,
             hours_held REAL,
             trailing_active INTEGER DEFAULT 0,
-            trailing_pct REAL
+            trailing_pct REAL,
+            is_partial INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS equity_log (
@@ -113,6 +114,12 @@ def init_db():
             ticker TEXT PRIMARY KEY,
             until_date TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_closed_exit_date ON closed_pos(exit_date);
+        CREATE INDEX IF NOT EXISTS idx_closed_ticker    ON closed_pos(ticker);
+        CREATE INDEX IF NOT EXISTS idx_closed_partial   ON closed_pos(is_partial);
+        CREATE INDEX IF NOT EXISTS idx_open_ticker      ON open_pos(ticker);
+        CREATE INDEX IF NOT EXISTS idx_cooldowns_until  ON cooldowns(until_date);
     """)
     conn.commit()
     # Migración: añadir columna trade_mode si la DB ya existía sin ella
@@ -126,6 +133,12 @@ def init_db():
         conn.execute("ALTER TABLE open_pos ADD COLUMN pyramid_count INTEGER DEFAULT 0")
         conn.commit()
         print("[storage] columna pyramid_count añadida a open_pos")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE closed_pos ADD COLUMN is_partial INTEGER DEFAULT 0")
+        conn.commit()
+        print("[storage] columna is_partial añadida a closed_pos")
     except Exception:
         pass
     print(f"[storage] SQLite inicializado: {DB_PATH}")
@@ -207,7 +220,20 @@ def partial_close(ticker, shares_sold, cost_recovered_eur):
     """Reduce las shares de una posición abierta (salida parcial) y devuelve capital.
     Transacción atómica — evita estado inconsistente.
     """
+    if shares_sold <= 0:
+        print(f"[storage] partial_close: shares_sold={shares_sold} inválido para {ticker}")
+        return
     conn = _conn()
+    # Verificar que quedan suficientes shares antes de reducir
+    row = conn.execute("SELECT shares FROM open_pos WHERE ticker=?", (ticker,)).fetchone()
+    if row is None:
+        print(f"[storage] partial_close: posición {ticker} no encontrada")
+        return
+    if float(row["shares"]) < shares_sold - 1e-9:
+        # Seguridad: no dejar shares negativas — vender solo lo que hay
+        shares_sold = float(row["shares"])
+        cost_recovered_eur = shares_sold  # valor mínimo aproximado, no debería ocurrir
+        print(f"[storage] partial_close: ajustando shares_sold a {shares_sold:.6f} para {ticker}")
     conn.execute("UPDATE state SET capital = capital + ? WHERE id=1", (round(cost_recovered_eur, 6),))
     conn.execute(
         "UPDATE open_pos SET shares = shares - ? WHERE ticker = ?",
@@ -257,8 +283,8 @@ def add_closed_trade(trade):
     _conn().execute("""
         INSERT INTO closed_pos (ticker, name, entry_date, exit_date, entry_price,
             exit_price, peak_price, currency, shares, ret_pct, pnl, pnl_eur,
-            reason, entry_score, hours_held, trailing_active, trailing_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reason, entry_score, hours_held, trailing_active, trailing_pct, is_partial)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         trade["ticker"], trade.get("name"), trade["entry_date"], trade["exit_date"],
         trade["entry_price"], trade["exit_price"], trade.get("peak_price"),
@@ -266,6 +292,7 @@ def add_closed_trade(trade):
         trade.get("pnl"), trade.get("pnl_eur"), trade.get("reason"),
         trade.get("entry_score"), trade.get("hours_held"),
         int(trade.get("trailing_active", False)), trade.get("trailing_pct"),
+        int(trade.get("is_partial", False)),
     ))
     _conn().commit()
 
@@ -293,12 +320,17 @@ def get_trades_by_period(start_date, end_date=None):
 
 
 def get_performance_stats():
-    """Estadísticas de rendimiento globales y por periodo."""
+    """Estadísticas de rendimiento globales y por periodo.
+    Las salidas parciales (is_partial=1) se excluyen de win_rate y avg_ret
+    porque siempre son positivas (se activan al llegar al take_profit),
+    lo que sesgaría artificialmente las métricas.
+    """
     conn = _conn()
     total = conn.execute("SELECT COUNT(*) as n FROM closed_pos").fetchone()["n"]
     if total == 0:
         return {"total_trades": 0}
 
+    # Stats sobre trades completos únicamente (excluye parciales)
     stats = conn.execute("""
         SELECT
             COUNT(*) as total_trades,
@@ -312,16 +344,22 @@ def get_performance_stats():
             ROUND(SUM(pnl_eur), 2) as total_pnl_eur,
             ROUND(AVG(hours_held), 1) as avg_hours
         FROM closed_pos
+        WHERE COALESCE(is_partial, 0) = 0
     """).fetchone()
 
-    # Rendimiento por mes
+    # Contar parciales por separado para info
+    partial_count = conn.execute(
+        "SELECT COUNT(*) as n, ROUND(SUM(pnl_eur),2) as pnl FROM closed_pos WHERE COALESCE(is_partial,0)=1"
+    ).fetchone()
+
+    # Rendimiento por mes — incluye parciales en PnL (dinero real) pero no en trade count
     monthly = conn.execute("""
         SELECT
             SUBSTR(exit_date, 1, 7) as month,
-            COUNT(*) as trades,
+            SUM(CASE WHEN COALESCE(is_partial,0)=0 THEN 1 ELSE 0 END) as trades,
             ROUND(SUM(pnl_eur), 2) as pnl_eur,
-            ROUND(AVG(ret_pct), 2) as avg_ret,
-            SUM(CASE WHEN ret_pct > 0 THEN 1 ELSE 0 END) as wins
+            ROUND(AVG(CASE WHEN COALESCE(is_partial,0)=0 THEN ret_pct END), 2) as avg_ret,
+            SUM(CASE WHEN COALESCE(is_partial,0)=0 AND ret_pct > 0 THEN 1 ELSE 0 END) as wins
         FROM closed_pos
         WHERE exit_date != 'OPEN'
         GROUP BY SUBSTR(exit_date, 1, 7)
@@ -332,24 +370,29 @@ def get_performance_stats():
     weekly = conn.execute("""
         SELECT
             SUBSTR(exit_date, 1, 10) as week_start,
-            COUNT(*) as trades,
+            SUM(CASE WHEN COALESCE(is_partial,0)=0 THEN 1 ELSE 0 END) as trades,
             ROUND(SUM(pnl_eur), 2) as pnl_eur,
-            ROUND(AVG(ret_pct), 2) as avg_ret
+            ROUND(AVG(CASE WHEN COALESCE(is_partial,0)=0 THEN ret_pct END), 2) as avg_ret
         FROM closed_pos
         WHERE exit_date != 'OPEN'
         GROUP BY CAST(JULIANDAY(exit_date) / 7 AS INTEGER)
         ORDER BY week_start
     """).fetchall()
 
-    # Top razones de salida
+    # Top razones de salida (excluye parciales — tendrían su propia razón uniforme)
     reasons = conn.execute("""
         SELECT reason, COUNT(*) as n, ROUND(AVG(ret_pct), 2) as avg_ret
         FROM closed_pos
+        WHERE COALESCE(is_partial, 0) = 0
         GROUP BY reason ORDER BY n DESC LIMIT 10
     """).fetchall()
 
+    result = _row_to_dict(stats)
+    result["partial_trades"]  = partial_count["n"]
+    result["partial_pnl_eur"] = partial_count["pnl"]
+
     return {
-        "total_trades":  _row_to_dict(stats),
+        "total_trades":  result,
         "monthly":       [_row_to_dict(r) for r in monthly],
         "weekly":        [_row_to_dict(r) for r in weekly],
         "exit_reasons":  [_row_to_dict(r) for r in reasons],
@@ -453,6 +496,7 @@ def migrate_from_json(json_path):
 
         # Open positions
         for pos in data.get("open", []):
+            pos.setdefault("pyramid_count", 0)   # evita TypeError en engine al leer NULL
             add_open_position(pos)
 
         # Closed trades

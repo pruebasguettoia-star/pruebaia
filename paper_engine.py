@@ -62,6 +62,12 @@ def _to_native(eur_price, currency):
 
 def init():
     storage.init_db()
+    # Validación de config: PYRA_MIN_RET debe ser mayor que el take_profit mínimo
+    # para evitar que pyramid y trailing se activen en el mismo ciclo
+    min_take_profit = min(TAKE_PROFIT_BY_REGIME.values())
+    if PYRA_MIN_RET >= min_take_profit:
+        print(f"[config] AVISO: PYRA_MIN_RET({PYRA_MIN_RET}%) >= take_profit mínimo({min_take_profit}%) "
+              f"— pyramid puede colisionar con trailing en {[k for k,v in TAKE_PROFIT_BY_REGIME.items() if v <= PYRA_MIN_RET]}")
     open_pos = storage.get_open_positions()
     closed = storage.get_closed_trades(1)
     if not open_pos and not closed:
@@ -155,6 +161,7 @@ def run_trading(market_data):
                         "entry_score": pos.get("entry_score"),
                         "hours_held": round(hours_held, 1),
                         "trailing_active": True, "trailing_pct": trailing_pct,
+                        "is_partial": True,
                     })
                     # Actualizar shares en la variable local para el resto del ciclo
                     pos = dict(pos)

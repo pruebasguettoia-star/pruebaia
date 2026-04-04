@@ -304,6 +304,7 @@ def api_paper2_reset():
     return jsonify({"status": "reset"})
 
 @app.route("/api/paper2/sell", methods=["POST"])
+@require_admin
 def api_paper2_sell():
     ticker = request.json.get("ticker")
     if not ticker:
@@ -344,8 +345,19 @@ def api_paper2_export():
     )
 
 # ── REFRESH ───────────────────────────────────────────────────────────────────
+_last_manual_refresh = 0.0
+_manual_refresh_lock = threading.Lock()
+_MANUAL_REFRESH_MIN_INTERVAL = 30  # segundos entre refreshes manuales
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
+    global _last_manual_refresh
+    with _manual_refresh_lock:
+        now = time.time()
+        if now - _last_manual_refresh < _MANUAL_REFRESH_MIN_INTERVAL:
+            remaining = int(_MANUAL_REFRESH_MIN_INTERVAL - (now - _last_manual_refresh))
+            return jsonify({"status": "rate_limited", "retry_after": remaining}), 429
+        _last_manual_refresh = now
     t = threading.Thread(target=refresh_data, daemon=True)
     t.start()
     return jsonify({"status": "refreshing"})
@@ -514,7 +526,7 @@ def api_ping():
         refresh_ts = cache.get("last_refresh_ts")
     finally:
         cache_lock.read_release()
-    age = round(time.time() - refresh_ts) if refresh_ts else None
+    age = round(time.time() - refresh_ts) if refresh_ts else 0
     return Response(json.dumps({"ready": ready, "last_updated": ts, "data_age_sec": age}),
                     mimetype="application/json", headers={"Cache-Control": "no-store"})
 

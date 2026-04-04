@@ -767,7 +767,9 @@ def fetch_ticker(name, ticker):
             # BULL_VOLATILE (SPY>SMA50, VIX 18-28): pesos estandar — igual que antes
             _regime_label = "BULL_VOLATILE"
 
-        # Total
+        # Total — re-aplicar cap de calidad tras multiplicadores adaptativos
+        # (los multiplicadores pueden llevar sc_quality más allá de -15)
+        sc_quality = max(-15, sc_quality)
         inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality + sc_rel
         inv_score = max(1, min(100, inv_score_raw))
 
