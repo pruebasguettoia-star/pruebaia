@@ -240,9 +240,16 @@ tr:hover td{background:#161a21;}
         <span style="color:var(--muted);font-size:9px;margin-left:4px;">SMA50</span>
         <span id="regime-urth-sma" style="margin-left:3px;color:var(--muted);">—</span>
       </div>
+      <div>
+        <span style="color:var(--muted);font-size:9px;">VIX</span>
+        <span id="regime-vix" style="margin-left:5px;color:#e8ecf2;">—</span>
+        <span style="color:var(--muted);font-size:9px;margin-left:4px;">SMA5</span>
+        <span id="regime-vix-sma" style="margin-left:3px;color:var(--muted);">—</span>
+      </div>
     </div>
-    <div style="margin-left:auto;color:var(--muted);font-size:9px;" id="regime-modes">
-      Modos activos: <span id="regime-active-modes" style="color:#e8ecf2;">—</span>
+    <div style="margin-left:auto;text-align:right;">
+      <div style="color:var(--muted);font-size:9px;">Modos activos: <span id="regime-active-modes" style="color:#e8ecf2;">—</span></div>
+      <div style="margin-top:3px;font-size:9px;">Scoring: <span id="regime-scoring" style="font-weight:600;">—</span></div>
     </div>
   </div>
 
@@ -500,6 +507,29 @@ function loadData(){
       document.getElementById("regime-spy-sma").textContent=reg.spy_sma50!=null?"$"+reg.spy_sma50.toFixed(2):"—";
       document.getElementById("regime-urth").innerHTML=fmtP(reg.urth_price,reg.urth_sma50);
       document.getElementById("regime-urth-sma").textContent=reg.urth_sma50!=null?"$"+reg.urth_sma50.toFixed(2):"—";
+      // VIX
+      var vixEl=document.getElementById("regime-vix");
+      var vixSmaEl=document.getElementById("regime-vix-sma");
+      if(reg.vix!=null){
+        var vixColor=reg.vix>30?"#e5553a":reg.vix>18?"#e5a223":"#34b566";
+        vixEl.innerHTML="<span style='color:"+vixColor+"'>"+reg.vix.toFixed(1)+"</span>";
+        vixSmaEl.textContent=reg.vix_sma5!=null?reg.vix_sma5.toFixed(1):"—";
+      } else {
+        vixEl.textContent="—"; vixSmaEl.textContent="—";
+      }
+      // Scoring regime label
+      var srEl=document.getElementById("regime-scoring");
+      var srMap={
+        "BULL_QUIET":    {label:"🟢 BULL QUIET — pesos BB%/Rel aumentados",  color:"#34b566"},
+        "BULL_VOLATILE": {label:"🟡 BULL VOLATILE — pesos estándar",          color:"#e5a223"},
+        "BEAR_MODERATE": {label:"🟠 BEAR MODERATE — pesos RSI/Calidad aumentados", color:"#e5853a"},
+        "BEAR_PANIC":    {label:"🔴 BEAR PANIC — solo RSI extremo cuenta",    color:"#e5553a"},
+      };
+      var sr=d.regime.scoring_regime||"BULL_VOLATILE";
+      // scoring_regime viene del endpoint /api/paper2 via regime_info
+      var srInfo=srMap[sr]||srMap["BULL_VOLATILE"];
+      srEl.textContent=srInfo.label;
+      srEl.style.color=srInfo.color;
       var modes=isMom?"Dip-buying (score ≥85) + Momentum":"Solo Dip-buying (score ≥85)";
       document.getElementById("regime-active-modes").textContent=modes;
       // Update header strategy labels
