@@ -114,6 +114,19 @@ EARLY_EXIT_MAX_SCORE = 80     # salir si score cayó por debajo de este umbral
 COOLDOWN_EARLY_CHECK_HOURS = 12    # revisar tras N horas de cooldown trailing
 COOLDOWN_EARLY_MIN_SCORE   = 85    # score mínimo para liberación anticipada
 
+# ── VIX CIRCUIT BREAKER ───────────────────────────────────────────────────────
+# Si el VIX suavizado (SMA5) supera este umbral, pausar TODAS las nuevas entradas.
+# VIX > 35 históricamente predice caídas adicionales — las señales de sobreventa
+# son trampas en pánico real. El sistema sigue gestionando posiciones abiertas.
+VIX_CIRCUIT_BREAKER        = True
+VIX_CIRCUIT_BREAKER_LEVEL  = 35.0  # VIX SMA5 por encima → no nuevas entradas
+
+# ── ATR MÁXIMO DE ENTRADA ─────────────────────────────────────────────────────
+# No entrar en activos con ATR > este umbral.
+# ATR alto en crashes = volatilidad extrema = señales falsas y stops muy amplios.
+# COIN, TSLA, ARKK pueden tener ATR >8% en pánico.
+ATR_MAX_ENTRY              = 6.0   # % máximo de ATR para abrir posición
+
 # ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
 # Stop loss = fallo real → 48h cooldown
 # Trailing stop / score / tiempo = salida técnica correcta → 24h cooldown

@@ -360,6 +360,20 @@ def get_market_regime():
         return _spy_unified_cache["scoring_regime"] or "BULL_VOLATILE"
 
 
+def get_vix_sma5():
+    """Devuelve el VIX suavizado (SMA5). None si no hay datos.
+    Usa el cache unificado — no hace request extra a yfinance.
+    """
+    now = time.monotonic()
+    with _spy_unified_lock:
+        if _spy_unified_cache["regime"] is not None and (now - _spy_unified_cache["ts"]) < _REGIME_TTL:
+            return _spy_unified_cache["regime"].get("vix_sma5")
+    _refresh_spy_cache()
+    with _spy_unified_lock:
+        reg = _spy_unified_cache.get("regime") or {}
+        return reg.get("vix_sma5")
+
+
 
 def is_momentum_candidate(row):
     """

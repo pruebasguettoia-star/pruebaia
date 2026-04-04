@@ -24,8 +24,10 @@ from config import (
     POS_SIZE_ON_INITIAL_CAP,
     EARLY_EXIT_ENABLED, EARLY_EXIT_MIN_HOURS, EARLY_EXIT_MIN_RET, EARLY_EXIT_MAX_SCORE,
     COOLDOWN_EARLY_CHECK_HOURS, COOLDOWN_EARLY_MIN_SCORE,
+    VIX_CIRCUIT_BREAKER, VIX_CIRCUIT_BREAKER_LEVEL,
+    ATR_MAX_ENTRY,
 )
-from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, is_momentum_candidate, calc_atr_pct
+from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, get_vix_sma5, is_momentum_candidate, calc_atr_pct
 import alpaca_api
 import storage
 import telegram_alerts
@@ -311,11 +313,24 @@ def run_trading(market_data):
         open_tickers = storage.get_open_tickers()
         capital      = storage.get_capital()
 
+        # ── VIX Circuit Breaker ───────────────────────────────────────────────
+        # Si VIX SMA5 > 35, pausar TODAS las nuevas entradas.
+        # Las señales de sobreventa en pánico real son trampas — el mercado sigue cayendo.
+        # El sistema sigue gestionando posiciones ya abiertas (stops, trailing, etc.)
+        vix_now = get_vix_sma5() if VIX_CIRCUIT_BREAKER else None
+        vix_breaker_active = (
+            VIX_CIRCUIT_BREAKER
+            and vix_now is not None
+            and vix_now > VIX_CIRCUIT_BREAKER_LEVEL
+        )
+        if vix_breaker_active:
+            print(f"[vix-breaker] VIX SMA5={vix_now:.1f} > {VIX_CIRCUIT_BREAKER_LEVEL} — nuevas entradas pausadas")
+
         # Base para position sizing: capital inicial fijo (evita shrinkage)
-        # o capital disponible si POS_SIZE_ON_INITIAL_CAP=False
         pos_base = PAPER2_INITIAL_CAP if POS_SIZE_ON_INITIAL_CAP else capital
 
         for ticker, row in ticker_map.items():
+            if vix_breaker_active: break          # VIX en pánico — no abrir nada
             if ticker in NON_TRADEABLE: continue
             if ticker in cooldowns or ticker in open_tickers: continue
             if not is_market_open(ticker): continue
@@ -330,8 +345,14 @@ def run_trading(market_data):
 
             trade_mode = "dip_buying" if is_dip else "momentum"
 
-            # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
+            # ── ATR máximo de entrada ─────────────────────────────────────────
+            # Volatilidad extrema = señales falsas + stops amplísimos
+            # COIN, TSLA, ARKK con ATR > 6% en pánico son trampas
             atr_entry = calc_atr_pct(ticker)
+            if atr_entry is not None and atr_entry > ATR_MAX_ENTRY:
+                continue   # activo demasiado volátil ahora mismo
+
+            # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
             if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
                 pos_pct = POS_PCT_LOW_VOL
             elif atr_entry is not None and atr_entry <= POS_VOL_MED_ATR:
@@ -482,6 +503,12 @@ def get_read_only_state(market_data):
     total_ret = round((total_equity - PAPER2_INITIAL_CAP) / PAPER2_INITIAL_CAP * 100, 2)
     regime_info = dict(get_spy_regime())
     regime_info["scoring_regime"] = get_market_regime()
+    vix_now = get_vix_sma5()
+    regime_info["vix_breaker_active"] = (
+        VIX_CIRCUIT_BREAKER
+        and vix_now is not None
+        and vix_now > VIX_CIRCUIT_BREAKER_LEVEL
+    )
     return {
         "capital": round(capital, 2), "open_value": round(open_value, 2),
         "total_equity": total_equity, "total_ret": total_ret, "initial": PAPER2_INITIAL_CAP,
