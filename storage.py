@@ -203,6 +203,19 @@ def atomic_open_position(pos, cost_eur):
     _conn().commit()
 
 
+def partial_close(ticker, shares_sold, cost_recovered_eur):
+    """Reduce las shares de una posición abierta (salida parcial) y devuelve capital.
+    Transacción atómica — evita estado inconsistente.
+    """
+    conn = _conn()
+    conn.execute("UPDATE state SET capital = capital + ? WHERE id=1", (round(cost_recovered_eur, 6),))
+    conn.execute(
+        "UPDATE open_pos SET shares = shares - ? WHERE ticker = ?",
+        (round(shares_sold, 6), ticker)
+    )
+    conn.commit()
+
+
 def atomic_pyramid(ticker, extra_shares, cost_eur):
     """Añade shares a una posición existente (pyramiding) y resta capital.
     Todo en una sola transacción para evitar estado inconsistente.

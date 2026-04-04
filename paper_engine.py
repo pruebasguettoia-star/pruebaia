@@ -16,6 +16,11 @@ from config import (
     HOLD_EXT_SCORE, HOLD_EXT_RET_PCT, HOLD_EXT_MAX_HOURS,
     PYRA_ENABLED, PYRA_MIN_RET, PYRA_MIN_HOURS, PYRA_MIN_SCORE,
     PYRA_SIZE_PCT, PYRA_MAX_PER_POS,
+    COOLDOWN_STOP_HOURS, COOLDOWN_TRAILING_HOURS,
+    POS_VOL_LOW_ATR, POS_VOL_MED_ATR,
+    POS_PCT_LOW_VOL, POS_PCT_MED_VOL, POS_PCT_HIGH_VOL,
+    PARTIAL_SELL_ENABLED, PARTIAL_SELL_PCT,
+    NON_TRADEABLE,
 )
 from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, is_momentum_candidate, calc_atr_pct
 import alpaca_api
@@ -89,7 +94,6 @@ def run_trading(market_data):
             trailing_drop = (current_price - peak_price) / peak_price * 100
             trailing_pct = pos.get("trailing_pct") or get_trailing_pct(ticker)
             exit_reason = None
-            needs_cooldown = False
             trailing_active = bool(pos.get("trailing_active", False))
             pyramid_count = int(pos.get("pyramid_count", 0))
 
@@ -98,13 +102,14 @@ def run_trading(market_data):
             hold_hours   = MOM_HOLD_HOURS  if is_mom_trade else PAPER2_HOLD_HOURS
             trailing_min = MOM_TRAILING_MIN if is_mom_trade else PAPER2_TRAILING_MIN
 
+            # ── ATR — una sola llamada, ya cacheado desde fetch_ticker ─────────
+            atr_pct = calc_atr_pct(ticker)
+
             # ── Stop dinámico por ATR ─────────────────────────────────────────
-            # Reemplaza el stop fijo -7% — adapta el riesgo a la volatilidad real
-            atr_pct = calc_atr_pct(ticker)   # ya cacheado desde fetch_ticker
             if atr_pct is not None:
                 dynamic_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ATR_STOP_MULT * atr_pct)), 2)
             else:
-                dynamic_stop = PAPER2_STOP_LOSS  # fallback al stop fijo
+                dynamic_stop = PAPER2_STOP_LOSS
 
             # ── Trailing dinámico por régimen ─────────────────────────────────
             # BULL_QUIET activa el trailing más tarde para dejar correr tendencias
@@ -124,9 +129,54 @@ def run_trading(market_data):
 
             # ── Lógica de salida ──────────────────────────────────────────────
             if not trailing_active and ret_pct > take_profit:
-                trailing_active = True; peak_price = current_price
+                trailing_active = True
+                peak_price = current_price
+                # ── Salida parcial al activar trailing ────────────────────────
+                # Vender PARTIAL_SELL_PCT de la posición, dejar el resto correr
+                if PARTIAL_SELL_ENABLED and pos["shares"] > 0:
+                    shares_to_sell  = pos["shares"] * PARTIAL_SELL_PCT
+                    eur_partial     = shares_to_sell * _to_eur(current_price, currency)
+                    pnl_partial_eur = shares_to_sell * (
+                        _to_eur(current_price, currency) - _to_eur(pos["entry_price"], currency)
+                    )
+                    ret_partial = ret_pct   # mismo ret_pct en el momento de la parcial
+                    storage.partial_close(ticker, shares_to_sell, eur_partial)
+                    storage.add_closed_trade({
+                        "ticker": ticker, "name": pos.get("name"),
+                        "entry_date": pos["entry_date"], "exit_date": now_str,
+                        "entry_price": pos["entry_price"],
+                        "exit_price": round(current_price, 2),
+                        "peak_price": round(peak_price, 2), "currency": currency,
+                        "shares": round(shares_to_sell, 6),
+                        "ret_pct": round(ret_partial, 2),
+                        "pnl": round(pnl_partial_eur, 2),
+                        "pnl_eur": round(pnl_partial_eur, 2),
+                        "reason": f"Salida parcial {int(PARTIAL_SELL_PCT*100)}% al activar trailing",
+                        "entry_score": pos.get("entry_score"),
+                        "hours_held": round(hours_held, 1),
+                        "trailing_active": True, "trailing_pct": trailing_pct,
+                    })
+                    # Actualizar shares en la variable local para el resto del ciclo
+                    pos = dict(pos)
+                    pos["shares"] = pos["shares"] - shares_to_sell
+                    _tg_pool.submit(
+                        telegram_alerts.alert_trade_close,
+                        ticker, pos.get("name", ""), round(ret_partial, 2),
+                        round(pnl_partial_eur, 2),
+                        f"Parcial {int(PARTIAL_SELL_PCT*100)}%", "EUR"
+                    )
+                    if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
+                        _alpaca_pool.submit(
+                            alpaca_api.place_order, ticker, "sell", 0,
+                            shares_to_sell   # qty para venta parcial
+                        )
+                    print(f"[partial] {ticker} vendido {int(PARTIAL_SELL_PCT*100)}% @ {current_price:.2f} ret={ret_pct:.1f}%")
+
+            # Cooldown diferenciado: stop loss = fallo real (48h), trailing/score/tiempo = OK (24h)
+            is_stop_loss_exit = False
             if ret_pct <= dynamic_stop:
-                exit_reason = f"Stop loss {ret_pct:.1f}% (ATR stop {dynamic_stop:.1f}%)"; needs_cooldown = True
+                exit_reason = f"Stop loss {ret_pct:.1f}% (ATR stop {dynamic_stop:.1f}%)"
+                is_stop_loss_exit = True
             elif trailing_active and trailing_drop <= -trailing_pct:
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
             elif trailing_active and current_score is not None and current_score < PAPER2_MIN_SCORE:
@@ -139,7 +189,8 @@ def run_trading(market_data):
                     else:
                         exit_reason = f"{hold_hours:.0f}h cumplidas, score {current_score} < {PAPER2_MIN_SCORE}"
                 elif hours_held >= max_hours:
-                    exit_reason = f"{max_hours:.0f}h negativo {ret_pct:.1f}%"; needs_cooldown = True
+                    exit_reason = f"{max_hours:.0f}h negativo {ret_pct:.1f}%"
+                    is_stop_loss_exit = True   # pérdida prolongada = cooldown largo
 
             if exit_reason:
                 eur_value = pos["shares"] * _to_eur(current_price, currency)
@@ -157,8 +208,10 @@ def run_trading(market_data):
                     "trailing_active": trailing_active, "trailing_pct": trailing_pct,
                 })
                 storage.remove_open_position(ticker)
-                if needs_cooldown:
-                    storage.set_cooldown(ticker, (now_dt + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
+                # Cooldown diferenciado: stop loss / pérdida prolongada → 48h
+                #                        trailing / score / tiempo → 24h
+                cooldown_h = COOLDOWN_STOP_HOURS if is_stop_loss_exit else COOLDOWN_TRAILING_HOURS
+                storage.set_cooldown(ticker, (now_dt + timedelta(hours=cooldown_h)).strftime("%Y-%m-%d %H:%M"))
                 _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
                 _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR")
             else:
@@ -214,26 +267,35 @@ def run_trading(market_data):
         capital      = storage.get_capital()
 
         for ticker, row in ticker_map.items():
+            if ticker in NON_TRADEABLE: continue          # excluir no operables
             if ticker in cooldowns or ticker in open_tickers: continue
             if not is_market_open(ticker): continue
 
             score = row.get("inv_score")
 
             # ── Modo DIP-BUYING (siempre activo) ──────────────────────────────
-            # Criterio original: score ≥ 85 (comprar activos sobrevendidos)
             is_dip  = score is not None and score >= PAPER2_MIN_SCORE
             # ── Modo MOMENTUM (solo cuando SPY y URTH > SMA50) ───────────────
-            # Criterio: activo en tendencia alcista con fuerza relativa positiva
             is_mom  = regime == "momentum" and is_momentum_candidate(row)
 
             if not is_dip and not is_mom:
                 continue
 
-            # Determinar etiqueta del modo (dip gana si ambos aplican,
-            # ya que ya se habría abierto por score — evita duplicados)
             trade_mode = "dip_buying" if is_dip else "momentum"
 
-            position_size = capital * PAPER2_POSITION_PCT
+            # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
+            # Vol baja  (ATR ≤ 1.5%): 13% — activos estables como SHY, AGG, XLP
+            # Vol media (ATR ≤ 3.0%): 10% — estándar
+            # Vol alta  (ATR >  3.0%): 7% — COIN, TSLA, ARKK, etc.
+            atr_entry = calc_atr_pct(ticker)   # ya cacheado
+            if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
+                pos_pct = POS_PCT_LOW_VOL
+            elif atr_entry is not None and atr_entry <= POS_VOL_MED_ATR:
+                pos_pct = POS_PCT_MED_VOL
+            else:
+                pos_pct = POS_PCT_HIGH_VOL
+
+            position_size = capital * pos_pct
             if position_size < 1: continue
 
             fx = get_eurusd()
@@ -315,10 +377,10 @@ def sell_manual(ticker, market_data):
             "hours_held": pos.get("hours_held"), "trailing_active": pos.get("trailing_active", False),
             "trailing_pct": pos.get("trailing_pct"),
         })
-        storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=48)).strftime("%Y-%m-%d %H:%M"))
+        storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=COOLDOWN_STOP_HOURS)).strftime("%Y-%m-%d %H:%M"))
         _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
         _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name", ""), round(ret_pct, 2), round(pnl_eur, 2), "Venta manual", "EUR")
-    return {"status": "sold", "cooldown_hours": 48}
+    return {"status": "sold", "cooldown_hours": COOLDOWN_STOP_HOURS}
 
 def reset():
     storage.reset_all()
@@ -338,7 +400,13 @@ def get_read_only_state(market_data):
         currency = pos.get("currency", "EUR")
         is_mom_ro = pos.get("trade_mode") == "momentum"
         hold_hrs_ro = MOM_HOLD_HOURS if is_mom_ro else PAPER2_HOLD_HOURS
-        max_hrs_ro  = MOM_MAX_HOURS  if is_mom_ro else PAPER2_MAX_HOURS
+        # Refleja la extensión de hold si aplica (mismo criterio que run_trading)
+        if (not is_mom_ro
+                and pos.get("score") is not None and pos["score"] >= HOLD_EXT_SCORE
+                and ret_pct >= HOLD_EXT_RET_PCT):
+            max_hrs_ro = HOLD_EXT_MAX_HOURS
+        else:
+            max_hrs_ro = MOM_MAX_HOURS if is_mom_ro else PAPER2_MAX_HOURS
         current_price = _to_native(row["price"], currency)
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
         peak_price = pos.get("peak_price", pos["entry_price"])

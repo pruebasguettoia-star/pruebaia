@@ -94,6 +94,42 @@ PYRA_MIN_SCORE    = 85     # score mínimo en el momento de añadir
 PYRA_SIZE_PCT     = 0.05   # 5% del capital por pyramid (mitad de la entrada inicial)
 PYRA_MAX_PER_POS  = 1      # máximo 1 pyramid por posición
 
+# ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
+# Stop loss = fallo real → 48h cooldown
+# Trailing stop / score / tiempo = salida técnica correcta → 24h cooldown
+COOLDOWN_STOP_HOURS     = 48   # stop loss activado
+COOLDOWN_TRAILING_HOURS = 24   # salida por trailing, score o tiempo
+
+# ── TAMAÑO DE POSICIÓN POR VOLATILIDAD ───────────────────────────────────────
+# ATR bajo (activos estables) → posición más grande
+# ATR alto (activos volátiles) → posición más pequeña
+# Riesgo en EUR por trade se iguala entre activos
+POS_VOL_LOW_ATR   = 1.5    # ATR% ≤ 1.5 → 13% del capital
+POS_VOL_MED_ATR   = 3.0    # ATR% ≤ 3.0 → 10% del capital (estándar)
+POS_VOL_HIGH_ATR  = 99.0   # ATR% > 3.0 → 7% del capital
+POS_PCT_LOW_VOL   = 0.13
+POS_PCT_MED_VOL   = 0.10
+POS_PCT_HIGH_VOL  = 0.07
+
+# ── SALIDA PARCIAL EN TRAILING ───────────────────────────────────────────────
+# Al activarse el trailing, vender PARTIAL_SELL_PCT de la posición
+# y dejar el resto correr con el trailing habitual
+PARTIAL_SELL_ENABLED = True
+PARTIAL_SELL_PCT     = 0.50   # vender 50% al activar trailing
+
+# ── TICKERS NO OPERABLES EN ALPACA/XTB ───────────────────────────────────────
+# Solo para monitoreo de precios — el paper trading nunca debe abrirlos
+NON_TRADEABLE = {
+    # Índices europeos puros (no son ETFs comprables)
+    "^FCHI", "^GDAXI", "^AEX", "^IBEX", "^SSMI",
+    # Futuros — Alpaca no opera futuros; XTB con símbolo distinto
+    "BZ=F", "CL=F", "NG=F", "ZW=F",
+    # Divisas — yfinance format, no operable en ninguna plataforma
+    "EURUSD=X", "JPY=X", "GBPUSD=X", "CHF=X", "CNY=X",
+    # ETF en LSE (GBP) — no disponible en Alpaca
+    "ISF.L",
+}
+
 # ── MOMENTUM MODE — parámetros diferenciados ──────────────────────────────────
 # Hold más largo para que la tendencia se desarrolle,
 # pero trailing más agresivo para asegurar ganancias antes

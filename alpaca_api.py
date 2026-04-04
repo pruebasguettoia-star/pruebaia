@@ -14,8 +14,10 @@ def _headers():
     }
 
 
-def place_order(ticker, side, notional_usd):
-    """Envía orden de mercado. side='buy'|'sell'. Devuelve order_id o None."""
+def place_order(ticker, side, notional_usd, qty=None):
+    """Envía orden de mercado. side='buy'|'sell'. Devuelve order_id o None.
+    Para ventas parciales pasar qty=shares_to_sell (float).
+    """
     if not alpaca_enabled():
         print("[alpaca] desactivado — configura ALPACA_API_KEY y ALPACA_SECRET_KEY")
         return None
@@ -31,11 +33,16 @@ def place_order(ticker, side, notional_usd):
                 return None
             payload["notional"] = str(round(notional_usd, 2))
         else:
-            qty = get_position_qty(ticker)
-            if qty is None or float(qty) <= 0:
-                print(f"[alpaca] no hay posición para {ticker}")
-                return None
-            payload["qty"] = qty
+            if qty is not None and float(qty) > 0:
+                # Venta parcial — qty explícito
+                payload["qty"] = str(round(float(qty), 6))
+            else:
+                # Venta total — usar qty de la posición en Alpaca
+                pos_qty = get_position_qty(ticker)
+                if pos_qty is None or float(pos_qty) <= 0:
+                    print(f"[alpaca] no hay posición para {ticker}")
+                    return None
+                payload["qty"] = pos_qty
 
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
