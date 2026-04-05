@@ -154,6 +154,10 @@ tr:hover td{background:#161a21;}
   <a class="nav-tab active" href="/paper2">⚡ Score85</a>
   <div class="nav-right">
     <span id="last-update" style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">—</span>
+    <input id="admin-token" type="password" placeholder="Admin token"
+      style="font-family:var(--font-mono);font-size:10px;background:var(--bg);border:1px solid var(--border2);color:var(--text);padding:4px 8px;border-radius:4px;width:110px;outline:none;"
+      oninput="localStorage.setItem('p2_admin_token',this.value)"
+      title="Token de administrador (ADMIN_TOKEN en Railway)"/>
     <button class="btn" onclick="loadData()">↺ Actualizar</button>
     <button class="btn btn-danger" onclick="resetPaper()">⚠ Reset</button>
     <button class="hamburger" onclick="toggleMobileMenu()" id="hamburger-btn">☰</button>
@@ -721,6 +725,21 @@ document.getElementById("p2-confirm-modal").addEventListener("click", function(e
   if (e.target === this) closeP2Modal();
 });
 
+// ── Token de admin ─────────────────────────────────────────────────────────
+// Se guarda en localStorage para no tener que reintroducirlo cada vez
+(function() {
+  var saved = localStorage.getItem("p2_admin_token");
+  if (saved) document.getElementById("admin-token").value = saved;
+})();
+
+function adminHeaders() {
+  var token = localStorage.getItem("p2_admin_token") || "";
+  return {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + token
+  };
+}
+
 function sellPosition(ticker, btn) {
   openP2Modal(
     "📤", "Vender posición",
@@ -728,7 +747,7 @@ function sellPosition(ticker, btn) {
     "Vender",
     function() {
       btn.disabled = true; btn.textContent = "…";
-      fetch("/api/paper2/sell", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ticker:ticker, reason:"Venta manual"})})
+      fetch("/api/paper2/sell", {method:"POST", headers: adminHeaders(), body:JSON.stringify({ticker:ticker, reason:"Venta manual"})})
         .then(function(r){return r.json();})
         .then(function(d) {
           if (d.error) { alert("Error: " + d.error); btn.disabled=false; btn.textContent="Vender"; return; }
@@ -745,7 +764,7 @@ function resetPaper() {
     "Esto borrará <strong>todas las posiciones, el historial y el capital</strong> y lo reiniciará a €10.000.<br><br>Esta acción no se puede deshacer.",
     "Resetear todo",
     function() {
-      fetch("/api/paper2/reset", {method:"POST"}).then(function() { loadData(); loadStats(); });
+      fetch("/api/paper2/reset", {method:"POST", headers: adminHeaders()}).then(function() { loadData(); loadStats(); });
     }
   );
 }
