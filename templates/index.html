@@ -1356,6 +1356,10 @@
     </div>
     <button class="refresh-btn" id="refresh-btn" onclick="triggerRefresh()">↺ Refresh</button>
     <button class="refresh-btn" onclick="openEmailModal()" style="margin-left:6px">✉ Alertas</button>
+    <div id="vix-chip" title="VIX — índice de volatilidad del mercado. >35 activa el circuit breaker." style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;border:1px solid var(--border2);background:var(--card-bg);font-family:var(--font-mono);font-size:11px;cursor:default;">
+      <span style="color:var(--muted);font-size:9px">VIX</span>
+      <span id="vix-chip-val" style="font-weight:700;color:var(--muted)">—</span>
+    </div>
     <a href="/paper2" id="paper-chip" class="paper-chip loading" title="Paper Trading Score85 — click para ver detalle">
       <span class="chip-icon">⚡</span>
       <span class="chip-dot" style="background:var(--muted)"></span>
@@ -2583,13 +2587,26 @@
       chip.classList.remove("loading", "pos", "neg");
       chip.classList.add(ret >= 0 ? "pos" : "neg");
       chip.title = `Paper Score85: ${sign}${ret.toFixed(2)}% · €${d.total_equity.toFixed(0)} · ${d.open.length} posiciones abiertas`;
-      // Update mobile bottom nav too
       const mobRet = document.getElementById("chip-ret-mob");
       if (mobRet) {
         mobRet.textContent = `${sign}${ret.toFixed(1)}%`;
         mobRet.style.color = ret >= 0 ? "#34b566" : "#c43030";
       }
-    } catch(e) { /* silently fail — chip stays in loading state */ }
+      // Actualizar VIX chip si viene en los datos del regime
+      if (d.regime && d.regime.vix_sma5 != null) updateVixChip(d.regime.vix_sma5);
+    } catch(e) { /* silently fail */ }
+  }
+
+  function updateVixChip(vix) {
+    const el = document.getElementById("vix-chip-val");
+    const chip = document.getElementById("vix-chip");
+    if (!el || vix == null) return;
+    el.textContent = vix.toFixed(1);
+    // Color: verde <20, amarillo 20-30, naranja 30-35, rojo >35 (circuit breaker)
+    const color = vix > 35 ? "#e4553a" : vix > 30 ? "#f97316" : vix > 20 ? "#fbbf24" : "#34b566";
+    el.style.color = color;
+    chip.style.borderColor = vix > 35 ? "rgba(228,85,58,0.4)" : "var(--border2)";
+    chip.title = `VIX SMA5: ${vix.toFixed(1)}${vix > 35 ? " — ⚠️ CIRCUIT BREAKER ACTIVO" : vix > 30 ? " — mercado estresado" : vix > 20 ? " — volatilidad moderada" : " — mercado tranquilo"}`;
   }
 
   async function pullData(force = false) {
@@ -2749,6 +2766,7 @@
     try {
       const ping = await fetch("/api/ping");
       const pj   = await ping.json();
+      if (pj.vix_sma5 != null) updateVixChip(pj.vix_sma5);
       if (pj.ready) {
         const hasData = await pullData(true);
         if (!hasData) triggerRefresh();
