@@ -242,18 +242,31 @@ def partial_close(ticker, shares_sold, cost_recovered_eur):
     conn.commit()
 
 
-def atomic_pyramid(ticker, extra_shares, cost_eur):
+def atomic_pyramid(ticker, extra_shares, native_cost):
     """Añade shares a una posición existente (pyramiding) y resta capital.
-    Todo en una sola transacción para evitar estado inconsistente.
+    native_cost: coste en moneda nativa del activo (USD para US stocks, EUR para EU).
+    Actualiza entry_price con precio promedio ponderado para que ret_pct y stop sean correctos.
     """
     conn = _conn()
-    conn.execute("UPDATE state SET capital = capital - ? WHERE id=1", (round(cost_eur, 6),))
+    row = conn.execute(
+        "SELECT shares, entry_price FROM open_pos WHERE ticker=?", (ticker,)
+    ).fetchone()
+    if row is None:
+        print(f"[storage] atomic_pyramid: posición {ticker} no encontrada")
+        return
+    orig_shares = float(row["shares"])
+    orig_entry  = float(row["entry_price"])
+    extra_entry = native_cost / extra_shares if extra_shares > 0 else orig_entry
+    total_shares = orig_shares + extra_shares
+    avg_entry = (orig_shares * orig_entry + extra_shares * extra_entry) / total_shares if total_shares > 0 else orig_entry
+    # El capital se deduce en el caller (paper_engine resta pyra_size en EUR vía atomic_open_position)
     conn.execute("""
         UPDATE open_pos
         SET shares = shares + ?,
-            pyramid_count = pyramid_count + 1
+            pyramid_count = pyramid_count + 1,
+            entry_price = ?
         WHERE ticker = ?
-    """, (round(extra_shares, 6), ticker))
+    """, (round(extra_shares, 6), round(avg_entry, 6), ticker))
     conn.commit()
 
 

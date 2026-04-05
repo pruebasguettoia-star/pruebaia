@@ -527,7 +527,8 @@ def api_ping():
     finally:
         cache_lock.read_release()
     age = round(time.time() - refresh_ts) if refresh_ts else 0
-    return Response(json.dumps({"ready": ready, "last_updated": ts, "data_age_sec": age}),
+    vix = indicators.get_vix_sma5()
+    return Response(json.dumps({"ready": ready, "last_updated": ts, "data_age_sec": age, "vix_sma5": vix}),
                     mimetype="application/json", headers={"Cache-Control": "no-store"})
 
 @app.route("/api/wake", methods=["GET"])

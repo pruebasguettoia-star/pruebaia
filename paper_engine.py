@@ -26,6 +26,9 @@ from config import (
     COOLDOWN_EARLY_CHECK_HOURS, COOLDOWN_EARLY_MIN_SCORE,
     VIX_CIRCUIT_BREAKER, VIX_CIRCUIT_BREAKER_LEVEL,
     ATR_MAX_ENTRY,
+    RSI_DIV_ENABLED, RSI_DIV_MIN_SCORE,
+    DIV_YIELD_ENABLED, DIV_YIELD_MIN_PCT, DIV_MIN_SCORE,
+    BONDS_ENABLED, BONDS_MIN_SCORE, BONDS_TICKERS,
 )
 from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, get_vix_sma5, is_momentum_candidate, calc_atr_pct
 import alpaca_api
@@ -261,7 +264,9 @@ def run_trading(market_data):
                     else:
                         extra_shares = pyra_size / current_price if current_price > 0 else 0
                     if extra_shares > 0:
-                        storage.atomic_pyramid(ticker, extra_shares, pyra_size)
+                        native_pyra_cost = pyra_size / fx if (currency == "USD" and fx > 0) else pyra_size
+                        storage.atomic_pyramid(ticker, extra_shares, native_pyra_cost)
+                        storage.add_capital(-pyra_size)  # deducir el coste en EUR del capital
                         pyramid_count += 1
                         notional_usd = pyra_size / fx if (currency == "USD" and fx > 0) else pyra_size
                         if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
@@ -342,11 +347,34 @@ def run_trading(market_data):
 
                 is_dip  = score is not None and score >= PAPER2_MIN_SCORE
                 is_mom  = regime == "momentum" and is_momentum_candidate(row)
+                trade_mode = "dip_buying" if is_dip else ("momentum" if is_mom else None)
+
+                # ── Estrategia: RSI Divergence ────────────────────────────────
+                # Divergencia RSI alcista = señal de alta convicción aunque score < 85
+                if (RSI_DIV_ENABLED and not is_dip
+                        and score is not None and score >= RSI_DIV_MIN_SCORE
+                        and row.get("rsi_divergence") == "bullish"):
+                    is_dip = True
+                    trade_mode = "rsi_divergence"
+
+                # ── Estrategia: Dividend Yield Filter ────────────────────────
+                # Inversores institucionales sostienen el precio cuando el yield es alto
+                elif (DIV_YIELD_ENABLED and not is_dip
+                        and score is not None and score >= DIV_MIN_SCORE
+                        and (row.get("div_yield") or 0) >= DIV_YIELD_MIN_PCT):
+                    is_dip = True
+                    trade_mode = "div_yield"
+
+                # ── Estrategia: Bonds score reducido ─────────────────────────
+                # TLT/SHY/AGG raramente llegan a 85 — umbral propio más bajo
+                elif (BONDS_ENABLED and not is_dip
+                        and ticker in BONDS_TICKERS
+                        and score is not None and score >= BONDS_MIN_SCORE):
+                    is_dip = True
+                    trade_mode = "bonds"
 
                 if not is_dip and not is_mom:
                     continue
-
-                trade_mode = "dip_buying" if is_dip else "momentum"
 
                 # ── ATR máximo de entrada ─────────────────────────────────────────
                 # Volatilidad extrema = señales falsas + stops amplísimos
@@ -516,7 +544,7 @@ def get_read_only_state(market_data):
         "capital": round(capital, 2), "open_value": round(open_value, 2),
         "total_equity": total_equity, "total_ret": total_ret, "initial": PAPER2_INITIAL_CAP,
         "open": positions, "closed": storage.get_closed_trades(200),
-        "equity_log": storage.get_equity_log(500),
+        "equity_log": storage.get_equity_log(2000),
         "min_score": PAPER2_MIN_SCORE, "hold_hours": PAPER2_HOLD_HOURS,
         "mom_hold_hours": MOM_HOLD_HOURS,
         "regime": regime_info,

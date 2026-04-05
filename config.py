@@ -127,6 +127,29 @@ VIX_CIRCUIT_BREAKER_LEVEL  = 35.0  # VIX SMA5 por encima → no nuevas entradas
 # COIN, TSLA, ARKK pueden tener ATR >8% en pánico.
 ATR_MAX_ENTRY              = 5.0   # % máximo de ATR para abrir posición
 
+# ── ESTRATEGIA: RSI DIVERGENCE ────────────────────────────────────────────────
+# Si hay divergencia RSI alcista (precio nuevo mínimo pero RSI no),
+# bajar el umbral de score a RSI_DIV_MIN_SCORE (vs 85 normal).
+# Edge documentado: ~75% WR en divergencias RSI alcistas en activos líquidos.
+RSI_DIV_ENABLED   = True
+RSI_DIV_MIN_SCORE = 78    # score mínimo cuando hay divergencia RSI bullish
+
+# ── ESTRATEGIA: DIVIDEND YIELD FILTER ────────────────────────────────────────
+# Si el div_yield del ticker supera DIV_YIELD_MIN_PCT,
+# bajar el umbral de score a DIV_MIN_SCORE.
+# Lógica: inversores institucionales compran en caídas para capturar yield alto.
+DIV_YIELD_ENABLED  = True
+DIV_YIELD_MIN_PCT  = 2.0   # % de dividendo mínimo para activar el filtro
+DIV_MIN_SCORE      = 78    # score mínimo cuando div_yield >= DIV_YIELD_MIN_PCT
+
+# ── ESTRATEGIA: BONDS SCORE REDUCIDO ─────────────────────────────────────────
+# TLT, SHY, AGG, HYG, TIP raramente llegan a score 85 (poca volatilidad).
+# Umbral propio más bajo para capturar sus señales de sobreventa.
+# Stop más ajustado porque el ATR de bonos es muy bajo (~0.3-0.8%).
+BONDS_ENABLED    = True
+BONDS_MIN_SCORE  = 75     # score mínimo para BONDS group
+BONDS_TICKERS    = {"TLT", "SHY", "AGG", "HYG", "TIP"}
+
 # ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
 # Stop loss = fallo real → 48h cooldown
 # Trailing stop / score / tiempo = salida técnica correcta → 24h cooldown
