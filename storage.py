@@ -450,9 +450,10 @@ def clean_expired_cooldowns():
     _conn().commit()
 
 
-def get_cooldowns_with_start():
-    """Devuelve cooldowns con su fecha de inicio estimada (until - COOLDOWN_TRAILING_HOURS).
-    Usado para liberación anticipada cuando el score del ticker vuelve a ser alto.
+def get_cooldowns_trailing():
+    """Devuelve cooldowns activos {ticker: until_date}.
+    Usado para la liberación anticipada de cooldowns de trailing (no stop loss).
+    Alias de get_cooldowns() con nombre más preciso.
     """
     rows = _conn().execute("SELECT ticker, until_date FROM cooldowns").fetchall()
     return {r["ticker"]: r["until_date"] for r in rows}
@@ -480,17 +481,21 @@ def reset_all():
 
 # ── EXPORT CSV ────────────────────────────────────────────────────────────────
 def export_trades_csv():
-    """Exporta trades cerrados como CSV string."""
+    """Exporta trades cerrados como CSV string.
+    Las salidas parciales (is_partial=1) se incluyen con esa columna visible
+    para que el análisis externo pueda filtrarlas.
+    """
     rows = _conn().execute(
         "SELECT * FROM closed_pos ORDER BY exit_date"
     ).fetchall()
     if not rows:
         return "No trades\n"
 
-    cols = rows[0].keys()
+    cols = list(rows[0].keys())
+    # Asegurar que is_partial aparece como columna — puede no existir en DBs antiguas
     lines = [",".join(cols)]
     for r in rows:
-        lines.append(",".join(str(r[c]) if r[c] is not None else "" for c in cols))
+        lines.append(",".join(str(r[c]) if r[c] is not None else "0" if c == "is_partial" else "" for c in cols))
     return "\n".join(lines)
 
 

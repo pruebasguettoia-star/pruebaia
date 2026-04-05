@@ -203,6 +203,9 @@ def run_trading(market_data):
                   and current_score is not None
                   and current_score < EARLY_EXIT_MAX_SCORE):
                 exit_reason = f"Salida anticipada: ret {ret_pct:.1f}% con score {current_score} < {EARLY_EXIT_MAX_SCORE}"
+                # Cooldown corto para evitar reentrada inmediata por modo momentum
+                # con score bajo (el score bajó por algo — no reentrar en 24h)
+                is_stop_loss_exit = False   # cooldown TRAILING_HOURS (24h), no stop
             elif hours_held >= hold_hours:
                 if ret_pct >= 0:
                     if current_score is not None and current_score >= PAPER2_MIN_SCORE:
@@ -287,7 +290,7 @@ def run_trading(market_data):
         # Si un ticker en cooldown de trailing (24h) ya tiene score >=85 tras 12h,
         # liberarlo para no perder la señal
         now_dt_check = datetime.now()
-        all_cooldowns = storage.get_cooldowns_with_start()
+        all_cooldowns = storage.get_cooldowns_trailing()
         for cd_ticker, until_str in list(all_cooldowns.items()):
             try:
                 until_dt = datetime.strptime(until_str, "%Y-%m-%d %H:%M")
@@ -329,75 +332,75 @@ def run_trading(market_data):
         # Base para position sizing: capital inicial fijo (evita shrinkage)
         pos_base = PAPER2_INITIAL_CAP if POS_SIZE_ON_INITIAL_CAP else capital
 
-        for ticker, row in ticker_map.items():
-            if vix_breaker_active: break          # VIX en pánico — no abrir nada
-            if ticker in NON_TRADEABLE: continue
-            if ticker in cooldowns or ticker in open_tickers: continue
-            if not is_market_open(ticker): continue
+        if not vix_breaker_active:
+            for ticker, row in ticker_map.items():
+                if ticker in NON_TRADEABLE: continue
+                if ticker in cooldowns or ticker in open_tickers: continue
+                if not is_market_open(ticker): continue
 
-            score = row.get("inv_score")
+                score = row.get("inv_score")
 
-            is_dip  = score is not None and score >= PAPER2_MIN_SCORE
-            is_mom  = regime == "momentum" and is_momentum_candidate(row)
+                is_dip  = score is not None and score >= PAPER2_MIN_SCORE
+                is_mom  = regime == "momentum" and is_momentum_candidate(row)
 
-            if not is_dip and not is_mom:
-                continue
+                if not is_dip and not is_mom:
+                    continue
 
-            trade_mode = "dip_buying" if is_dip else "momentum"
+                trade_mode = "dip_buying" if is_dip else "momentum"
 
-            # ── ATR máximo de entrada ─────────────────────────────────────────
-            # Volatilidad extrema = señales falsas + stops amplísimos
-            # COIN, TSLA, ARKK con ATR > 6% en pánico son trampas
-            atr_entry = calc_atr_pct(ticker)
-            if atr_entry is not None and atr_entry > ATR_MAX_ENTRY:
-                continue   # activo demasiado volátil ahora mismo
+                # ── ATR máximo de entrada ─────────────────────────────────────────
+                # Volatilidad extrema = señales falsas + stops amplísimos
+                # COIN, TSLA, ARKK con ATR > 6% en pánico son trampas
+                atr_entry = calc_atr_pct(ticker)
+                if atr_entry is not None and atr_entry > ATR_MAX_ENTRY:
+                    continue   # activo demasiado volátil ahora mismo
 
-            # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
-            if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
-                pos_pct = POS_PCT_LOW_VOL
-            elif atr_entry is not None and atr_entry <= POS_VOL_MED_ATR:
-                pos_pct = POS_PCT_MED_VOL
-            else:
-                pos_pct = POS_PCT_HIGH_VOL
+                # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
+                if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
+                    pos_pct = POS_PCT_LOW_VOL
+                elif atr_entry is not None and atr_entry <= POS_VOL_MED_ATR:
+                    pos_pct = POS_PCT_MED_VOL
+                else:
+                    pos_pct = POS_PCT_HIGH_VOL
 
-            # Tamaño fijo sobre capital inicial — no se reduce con posiciones abiertas
-            position_size = pos_base * pos_pct
-            # Guard: no entrar si no hay capital real suficiente
-            if position_size < 1 or capital < position_size:
-                continue
+                # Tamaño fijo sobre capital inicial — no se reduce con posiciones abiertas
+                position_size = pos_base * pos_pct
+                # Guard: no entrar si no hay capital real suficiente
+                if position_size < 1 or capital < position_size:
+                    continue
 
-            fx = get_eurusd()
-            if ticker in ALPACA_TRADEABLE and fx > 0:
-                native_price = round(row["price"] / fx, 4); currency = "USD"
-            else:
-                native_price = row["price"]; currency = "EUR"
+                fx = get_eurusd()
+                if ticker in ALPACA_TRADEABLE and fx > 0:
+                    native_price = round(row["price"] / fx, 4); currency = "USD"
+                else:
+                    native_price = row["price"]; currency = "EUR"
 
-            # shares se calcula sobre el precio nativo para que el P&L
-            # (shares × Δnative) sea consistente con la divisa de entry_price.
-            # position_size está en EUR → convertimos al nativo antes de dividir.
-            native_position_size = position_size / fx if (currency == "USD" and fx > 0) else position_size
-            shares       = native_position_size / native_price if native_price > 0 else 0
-            notional_usd = position_size / fx if fx > 0 else position_size
-            trailing_pct_entry = get_trailing_pct(ticker)
+                # shares se calcula sobre el precio nativo para que el P&L
+                # (shares × Δnative) sea consistente con la divisa de entry_price.
+                # position_size está en EUR → convertimos al nativo antes de dividir.
+                native_position_size = position_size / fx if (currency == "USD" and fx > 0) else position_size
+                shares       = native_position_size / native_price if native_price > 0 else 0
+                notional_usd = position_size / fx if fx > 0 else position_size
+                trailing_pct_entry = get_trailing_pct(ticker)
 
-            storage.atomic_open_position({
-                "ticker": ticker, "name": row["name"], "entry_date": now_str,
-                "entry_price": native_price, "current_price": native_price,
-                "peak_price": native_price, "currency": currency,
-                "shares": round(shares, 6), "ret_pct": 0.0, "trailing_drop": 0.0,
-                "trailing_active": False, "trailing_pct": trailing_pct_entry,
-                "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
-                "entry_score": score, "score": score, "waiting_recovery": False,
-                "trade_mode": trade_mode,
-            }, cost_eur=position_size)
-            capital -= position_size
-            open_tickers.add(ticker)
-            if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
-                _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
-            _tg_pool.submit(
-                telegram_alerts.alert_trade_open,
-                ticker, row["name"], score, native_price, currency,
-            )
+                storage.atomic_open_position({
+                    "ticker": ticker, "name": row["name"], "entry_date": now_str,
+                    "entry_price": native_price, "current_price": native_price,
+                    "peak_price": native_price, "currency": currency,
+                    "shares": round(shares, 6), "ret_pct": 0.0, "trailing_drop": 0.0,
+                    "trailing_active": False, "trailing_pct": trailing_pct_entry,
+                    "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
+                    "entry_score": score, "score": score, "waiting_recovery": False,
+                    "trade_mode": trade_mode,
+                }, cost_eur=position_size)
+                capital -= position_size
+                open_tickers.add(ticker)
+                if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
+                    _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
+                _tg_pool.submit(
+                    telegram_alerts.alert_trade_open,
+                    ticker, row["name"], score, native_price, currency,
+                )
 
         # Equity log
         positions = storage.get_open_positions()

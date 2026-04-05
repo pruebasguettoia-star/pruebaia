@@ -125,7 +125,7 @@ VIX_CIRCUIT_BREAKER_LEVEL  = 35.0  # VIX SMA5 por encima → no nuevas entradas
 # No entrar en activos con ATR > este umbral.
 # ATR alto en crashes = volatilidad extrema = señales falsas y stops muy amplios.
 # COIN, TSLA, ARKK pueden tener ATR >8% en pánico.
-ATR_MAX_ENTRY              = 6.0   # % máximo de ATR para abrir posición
+ATR_MAX_ENTRY              = 5.0   # % máximo de ATR para abrir posición
 
 # ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
 # Stop loss = fallo real → 48h cooldown
