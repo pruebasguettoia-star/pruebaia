@@ -14,19 +14,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 log = logging.getLogger("tracker")
 
 import yfinance as yf
-import requests
-
-# Sesión requests con timeout global para todas las llamadas yfinance
-# Evita que hilos de refresh queden bloqueados indefinidamente
-class _TimeoutAdapter(requests.adapters.HTTPAdapter):
-    """Adapter que fuerza timeout en todas las peticiones — evita bloqueos indefinidos."""
-    def send(self, *args, **kwargs):
-        kwargs.setdefault("timeout", 25)
-        return super().send(*args, **kwargs)
-
-_YF_SESSION = requests.Session()
-_YF_SESSION.mount("https://", _TimeoutAdapter())
-_YF_SESSION.mount("http://",  _TimeoutAdapter())
 
 from config import (
     GROUPS, USD_TICKERS, INTRADAY_TTL, FUND_TTL, FUND_MAX,
@@ -80,7 +67,7 @@ def get_fundamentals(ticker):
     pe_ratio = div_yield = beta = None
     full = None
     try:
-        t = yf.Ticker(ticker, session=_YF_SESSION)
+        t = yf.Ticker(ticker)
         info = t.fast_info
         pe_raw = getattr(info, "pe_ratio", None)
         if pe_raw and pe_raw > 0:
@@ -160,7 +147,7 @@ def fetch_intraday(ticker):
         if hit and (_now - hit[0]) < INTRADAY_TTL:
             return hit[1]
     try:
-        t = yf.Ticker(ticker, session=_YF_SESSION)
+        t = yf.Ticker(ticker)
         intra = t.history(period="5d", interval="1h", auto_adjust=True)
         if intra.empty or len(intra) < 2:
             return None, None, None, None, None, None
@@ -232,7 +219,7 @@ def calc_atr_pct(ticker, hist=None):
             return hit[1]
     try:
         if hist is None or hist.empty or len(hist) < 15:
-            t = yf.Ticker(ticker, session=_YF_SESSION)
+            t = yf.Ticker(ticker)
             hist = t.history(period="1mo", auto_adjust=True)
         if hist.empty or len(hist) < 15:
             return None
@@ -289,7 +276,7 @@ def _refresh_spy_cache():
 
     for sym in ("SPY", "URTH"):
         try:
-            t = yf.Ticker(sym, session=_YF_SESSION)
+            t = yf.Ticker(sym)
             hist = t.history(period="6mo", auto_adjust=True)
             if hist.empty or len(hist) < 50:
                 result[sym] = {"price": None, "sma50": None, "above": None}
@@ -309,7 +296,7 @@ def _refresh_spy_cache():
     vix_current = None
     vix_sma5    = None
     try:
-        vix_hist = yf.Ticker("^VIX", session=_YF_SESSION).history(period="1mo", auto_adjust=True)
+        vix_hist = yf.Ticker("^VIX").history(period="1mo", auto_adjust=True)
         if not vix_hist.empty and len(vix_hist) >= 5:
             vix_hist.index = vix_hist.index.tz_localize(None) if vix_hist.index.tzinfo else vix_hist.index
             vix_close   = vix_hist["Close"]
@@ -498,37 +485,15 @@ def dist_cache_get(ticker):   return cache_get(_DIST_CACHE, _dist_lock, ticker)
 def dist_cache_set(ticker, data):  cache_set(_DIST_CACHE, _dist_lock, ticker, data)
 
 # ── FETCH TICKER (main data function) ────────────────────────────────────────
-def _yf_history_with_retry(ticker_obj, **kwargs):
-    """Descarga histórico con retry automático en caso de rate limit (429).
-    Backoff exponencial: 2s, 4s, 8s — máximo 3 intentos.
-    """
-    import time as _time
-    for attempt in range(3):
-        try:
-            result = ticker_obj.history(**kwargs)
-            if not result.empty:
-                return result
-            if attempt < 2:
-                _time.sleep(2 ** attempt)
-        except Exception as e:
-            err_str = str(e).lower()
-            if '429' in err_str or 'too many' in err_str or 'rate' in err_str:
-                wait = 2 ** (attempt + 1)
-                log.warning("[yfinance] rate limit en %s — esperando %ds", ticker_obj.ticker, wait)
-                _time.sleep(wait)
-            elif attempt == 2:
-                raise
-            else:
-                _time.sleep(1)
-    return ticker_obj.history(**kwargs)  # último intento sin captura
+
 
 
 def fetch_ticker(name, ticker):
     """Fetch all indicators for a single ticker. Returns dict or None."""
     try:
-        t   = yf.Ticker(ticker, session=_YF_SESSION)
+        t   = yf.Ticker(ticker)
         now = datetime.now()
-        _hist_raw = _yf_history_with_retry(t, period="1y", auto_adjust=True)
+        _hist_raw = t.history(period="1y", auto_adjust=True)
         if _hist_raw.empty:
             return None
         _hist_raw.index = _hist_raw.index.tz_localize(None) if _hist_raw.index.tzinfo else _hist_raw.index
@@ -920,7 +885,8 @@ def fetch_ticker(name, ticker):
             "currency": "EUR" if fx != 1.0 else "local",
         }
     except Exception as e:
-        log.warning("Error fetching %s: %s", ticker, e)
+        import traceback
+        log.warning("Error fetching %s: %s | %s", ticker, e, traceback.format_exc().split("\n")[-3])
         return None
 
 # ── BREAKDOWN TO STRING ───────────────────────────────────────────────────────

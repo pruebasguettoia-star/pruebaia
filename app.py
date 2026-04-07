@@ -33,7 +33,7 @@ import time
 import gc
 import json
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 from config import (
     GROUPS, REFRESH_INTERVAL, PAPER2_INITIAL_CAP, PAPER2_HOLD_HOURS, PAPER2_MIN_SCORE,
@@ -137,7 +137,7 @@ def refresh_data():
                         if row: row_map[ticker] = (g, row)
                     except Exception as e:
                         log.warning("fetch %s: %s", ticker, e)
-            except TimeoutError:
+            except (FuturesTimeoutError, TimeoutError):
                 log.warning("as_completed timeout — usando %d tickers ya recibidos", len(row_map))
 
         result = {g: [] for g in GROUPS}
@@ -751,6 +751,33 @@ def api_watchlist():
         return jsonify({"watchlist": items, "count": len(items)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/diag")
+def api_diag():
+    """Diagnóstico: prueba fetch de 3 tickers y devuelve resultado."""
+    import traceback
+    results = {}
+    test_tickers = [("S&P 500 ETF", "SPY"), ("Apple", "AAPL"), ("MSCI World", "URTH")]
+    for name, ticker in test_tickers:
+        try:
+            row = indicators.fetch_ticker(name, ticker)
+            results[ticker] = {"ok": row is not None, "price": row.get("price") if row else None}
+        except Exception as e:
+            results[ticker] = {"ok": False, "error": str(e), "tb": traceback.format_exc()[-300:]}
+    cache_lock.read_acquire()
+    try:
+        data_ok = cache.get("data") is not None
+        n_tickers = sum(len(v) for v in (cache.get("data") or {}).values())
+        last_updated = cache.get("last_updated")
+    finally:
+        cache_lock.read_release()
+    return jsonify({
+        "cache_has_data": data_ok,
+        "cached_tickers": n_tickers,
+        "last_updated": last_updated,
+        "fetch_test": results,
+    })
 
 
 @app.route("/api/ping")
