@@ -2,7 +2,13 @@
 app.py — Market Tracker (Flask).
 Módulos: config, auth, alpaca_api, indicators, paper_engine, storage
 """
+import sys
 import os
+
+# Deshabilitar caché .pyc — evita que Railway ejecute bytecode obsoleto
+# de versiones anteriores cacheadas en el build layer o Volume.
+sys.dont_write_bytecode = True
+
 import logging
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
