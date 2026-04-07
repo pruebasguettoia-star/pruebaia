@@ -26,7 +26,7 @@ from config import (
     EARLY_EXIT_ENABLED, EARLY_EXIT_MIN_HOURS, EARLY_EXIT_MIN_RET, EARLY_EXIT_MAX_SCORE,
     COOLDOWN_EARLY_CHECK_HOURS, COOLDOWN_EARLY_MIN_SCORE,
     VIX_CIRCUIT_BREAKER, VIX_CIRCUIT_BREAKER_LEVEL,
-    ATR_MAX_ENTRY,
+    ATR_MAX_ENTRY, VOL_MIN_ENTRY,
     RSI_DIV_ENABLED, RSI_DIV_MIN_SCORE,
     DIV_YIELD_ENABLED, DIV_YIELD_MIN_PCT, DIV_MIN_SCORE,
     BONDS_ENABLED, BONDS_MIN_SCORE, BONDS_TICKERS,
@@ -109,6 +109,16 @@ def run_trading(market_data):
             if current_price > peak_price: peak_price = current_price
             trailing_drop = (current_price - peak_price) / peak_price * 100
             trailing_pct = pos.get("trailing_pct") or get_trailing_pct(ticker)
+
+            # ── MEJORA: Trailing asimétrico por hora de cierre ───────────────
+            # Si quedan <45min para cierre US y hay ganancia, apretar trailing
+            # para asegurar beneficios antes del gap nocturno
+            if trailing_active and ret_pct > 0 and ticker not in EU_TICKERS:
+                _mins_utc = now_dt.utctimetuple().tm_hour * 60 + now_dt.utctimetuple().tm_min
+                # Cierre US aprox 20:30-21:00 UTC — apretar trailing a partir de 20:15
+                if 20*60+15 <= _mins_utc <= 21*60:
+                    trailing_pct = round(max(trailing_pct * 0.55, 0.8), 2)  # mínimo 0.8%
+
             exit_reason = None
             trailing_active = bool(pos.get("trailing_active", False))
             pyramid_count = int(pos.get("pyramid_count", 0))
@@ -349,6 +359,17 @@ def run_trading(market_data):
                 if ticker in NON_TRADEABLE: continue
                 if ticker in cooldowns or ticker in open_tickers: continue
                 if not is_market_open(ticker): continue
+
+                # ── MEJORA: Filtro de hora de entrada ────────────────────────
+                # Evitar entradas en los primeros y últimos 30 min del mercado US
+                # (alta volatilidad espuria, spread elevado, órdenes institucionales de apertura/cierre)
+                if ticker not in EU_TICKERS and ticker not in FUTURES_TICKERS:
+                    _t_utc = now_dt.utctimetuple()
+                    _mins  = _t_utc.tm_hour * 60 + _t_utc.tm_min
+                    # US open: 13:30-14:00 UTC y close: 20:30-21:00 UTC
+                    if 13*60+30 <= _mins <= 14*60 or 20*60+30 <= _mins <= 21*60:
+                        continue  # zona de ruido — saltar entrada
+
                 # Releer capital de DB en cada iteración para evitar desincronización
                 # si una entrada previa falló a mitad o si el ciclo tarda varios segundos
                 capital = storage.get_capital()
@@ -385,6 +406,13 @@ def run_trading(market_data):
 
                 if not is_dip and not is_mom:
                     continue
+
+                # ── MEJORA: Filtro de volumen mínimo ─────────────────────────
+                # vol_rel < 0.6 = señal poco fiable + spread elevado
+                # Las señales con volumen muy bajo tienen ~40% menos de WR histórico
+                _vol_rel = row.get("vol_rel")
+                if _vol_rel is not None and _vol_rel < VOL_MIN_ENTRY:
+                    continue  # volumen insuficiente — señal poco fiable
 
                 # ── ATR máximo de entrada ─────────────────────────────────────────
                 # Volatilidad extrema = señales falsas + stops amplísimos
@@ -442,6 +470,25 @@ def run_trading(market_data):
                     ticker, row["name"], score, native_price, currency,
                     row.get("inv_score_breakdown"), trade_mode,
                 )
+
+        # ── Actualizar watchlist — tickers cerca del umbral (score 70-84) ──────
+        try:
+            storage.clean_watchlist_stale(hours=48)
+            _watchlist_threshold_low  = 70
+            _watchlist_threshold_high = PAPER2_MIN_SCORE - 1  # 84
+            for _tk, _row in ticker_map.items():
+                _sc = _row.get("inv_score")
+                if (isinstance(_sc, (int, float))
+                        and _watchlist_threshold_low <= _sc <= _watchlist_threshold_high
+                        and _tk not in open_tickers
+                        and _tk not in cooldowns
+                        and _tk not in NON_TRADEABLE):
+                    storage.upsert_watchlist(
+                        _tk, _row.get("name", _tk), int(_sc),
+                        _row.get("signal", ""), _row.get("rsi"), _row.get("bb_pct")
+                    )
+        except Exception as _we:
+            log.debug("watchlist update error: %s", _we)
 
         # Equity log — convertir a EUR para consistencia
         positions = storage.get_open_positions()

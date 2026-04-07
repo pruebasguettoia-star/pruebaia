@@ -116,6 +116,12 @@ COOLDOWN_EARLY_MIN_SCORE   = 85    # score mínimo para liberación anticipada
 VIX_CIRCUIT_BREAKER        = True
 VIX_CIRCUIT_BREAKER_LEVEL  = 35.0  # VIX SMA5 por encima → no nuevas entradas
 
+# ── VOLUMEN MÍNIMO DE ENTRADA ────────────────────────────────────────────────
+# No entrar si el volumen relativo es menor que este umbral.
+# vol_rel < 0.6 → señal poco fiable, spread elevado, riesgo de trampa.
+# En mercado cerrado el vol_rel es None → el filtro se salta automáticamente.
+VOL_MIN_ENTRY              = 0.6   # vol relativo mínimo para abrir posición
+
 # ── ATR MÁXIMO DE ENTRADA ─────────────────────────────────────────────────────
 # No entrar en activos con ATR > este umbral.
 # ATR alto en crashes = volatilidad extrema = señales falsas y stops muy amplios.

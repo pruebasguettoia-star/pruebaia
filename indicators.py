@@ -18,10 +18,15 @@ import requests
 
 # Sesión requests con timeout global para todas las llamadas yfinance
 # Evita que hilos de refresh queden bloqueados indefinidamente
+class _TimeoutAdapter(requests.adapters.HTTPAdapter):
+    """Adapter que fuerza timeout en todas las peticiones — evita bloqueos indefinidos."""
+    def send(self, *args, **kwargs):
+        kwargs.setdefault("timeout", 25)
+        return super().send(*args, **kwargs)
+
 _YF_SESSION = requests.Session()
-_YF_SESSION.request = lambda method, url, **kwargs: requests.Session.request(
-    _YF_SESSION, method, url, timeout=kwargs.pop("timeout", 20), **kwargs
-)
+_YF_SESSION.mount("https://", _TimeoutAdapter())
+_YF_SESSION.mount("http://",  _TimeoutAdapter())
 
 from config import (
     GROUPS, USD_TICKERS, INTRADAY_TTL, FUND_TTL, FUND_MAX,
@@ -850,7 +855,8 @@ def fetch_ticker(name, ticker):
             sc_div_bonus= round(sc_div_bonus* 1.50)
             _regime_label = "BEAR_PANIC"
         else:
-            # BULL_VOLATILE (SPY>SMA50, VIX 18-28): pesos estandar — igual que antes
+            # BULL_VOLATILE (SPY>SMA50, VIX 18-28): pesos estándar — sin multiplicadores
+            # Los valores de sc_* ya calculados arriba son los pesos finales
             _regime_label = "BULL_VOLATILE"
 
         # Total — re-aplicar cap de calidad tras multiplicadores adaptativos
@@ -866,6 +872,13 @@ def fetch_ticker(name, ticker):
             "pe": sc_pe_note, "dy": sc_dy_note,
             "div":     sc_div_note, "total": inv_score,
             "regime":  _regime_label,
+            # Nota del régimen para el frontend — explica por qué cambió el score
+            "regime_note": {
+                "BULL_QUIET":    "Pesos adaptativos: BB% y Rel.Strength aumentados",
+                "BULL_VOLATILE": "Pesos estándar",
+                "BEAR_MODERATE": "Pesos adaptativos: RSI y Calidad aumentados",
+                "BEAR_PANIC":    "Pesos adaptativos: solo RSI extremo cuenta",
+            }.get(_regime_label, ""),
         }
 
         # Sparkline

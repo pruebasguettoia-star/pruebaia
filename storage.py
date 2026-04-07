@@ -140,6 +140,19 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_closed_partial   ON closed_pos(is_partial)",
         "CREATE INDEX IF NOT EXISTS idx_open_ticker      ON open_pos(ticker)",
         "CREATE INDEX IF NOT EXISTS idx_cooldowns_until  ON cooldowns(until_date)",
+        # Watchlist: tickers que estuvieron cerca del umbral (score 75-84)
+        # Permite detectar cuándo cruzan al umbral real sin esperar el ciclo de refresh
+        """CREATE TABLE IF NOT EXISTS watchlist (
+            ticker TEXT PRIMARY KEY,
+            name TEXT,
+            score INTEGER,
+            signal TEXT,
+            rsi REAL,
+            bb_pct REAL,
+            last_seen TEXT NOT NULL,
+            times_seen INTEGER DEFAULT 1
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_watchlist_score ON watchlist(score DESC)",
     ]
     for stmt in stmts:
         try:
@@ -585,6 +598,39 @@ def _row_to_dict(row):
         if k in d and isinstance(d[k], int):
             d[k] = bool(d[k])
     return d
+
+
+# ── WATCHLIST ─────────────────────────────────────────────────────────────────
+def upsert_watchlist(ticker, name, score, signal, rsi, bb_pct):
+    """Inserta o actualiza un ticker en la watchlist (score entre 70-84)."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _conn().execute("""
+        INSERT INTO watchlist (ticker, name, score, signal, rsi, bb_pct, last_seen, times_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(ticker) DO UPDATE SET
+            score      = excluded.score,
+            signal     = excluded.signal,
+            rsi        = excluded.rsi,
+            bb_pct     = excluded.bb_pct,
+            last_seen  = excluded.last_seen,
+            times_seen = watchlist.times_seen + 1
+    """, (ticker, name, score, signal, rsi, bb_pct, now_str))
+    _conn().commit()
+
+
+def get_watchlist(limit=20):
+    """Devuelve los tickers más cercanos al umbral, ordenados por score desc."""
+    rows = _conn().execute(
+        "SELECT * FROM watchlist ORDER BY score DESC, times_seen DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def clean_watchlist_stale(hours=48):
+    """Elimina entradas no actualizadas en las últimas N horas."""
+    cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+    _conn().execute("DELETE FROM watchlist WHERE last_seen < ?", (cutoff,))
+    _conn().commit()
 
 
 # ── NO AUTO-INIT — llamar init_db() desde paper_engine.init() ────────────────

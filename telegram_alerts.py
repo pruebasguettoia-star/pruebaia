@@ -125,5 +125,61 @@ def send_weekly_report(positions, capital, stats, vix, regime, top_tickers):
     send_message("\n".join(lines))
 
 
+def send_daily_summary(positions, capital, stats, vix, regime, top_signals, equity, total_ret):
+    """Resumen diario enviado a las 22:00 UTC (cierre mercado US).
+    Muestra equity actual, posiciones abiertas, P&L del día y top señales.
+    """
+    if not TELEGRAM_ENABLED:
+        return
+    tr    = stats.get("total_trades") or {}
+    total = tr.get("total_trades", 0)
+    wins  = tr.get("wins", 0)
+    wr    = round(wins / max(total, 1) * 100)
+    pnl   = tr.get("total_pnl_eur", 0) or 0
+
+    sign_eq  = "+" if total_ret >= 0 else ""
+    emoji_eq = "📈" if total_ret >= 0 else "📉"
+    vix_str  = f"{vix:.1f}" if vix else "—"
+    regime_emoji = {"momentum": "🟢", "dip_buying": "🟡"}.get(regime, "⚪")
+
+    lines = [
+        f"{emoji_eq} <b>Resumen diario — Market Tracker</b>",
+        "",
+        f"💼 Equity: <b>€{equity:,.0f}</b> ({sign_eq}{total_ret:.1f}% vs inicial)",
+        f"💶 Capital libre: €{capital:,.0f}",
+        f"🌡 VIX: {vix_str}  {regime_emoji} Régimen: {regime}",
+        "",
+    ]
+
+    if positions:
+        lines.append(f"<b>Posiciones abiertas ({len(positions)})</b>")
+        for p in sorted(positions, key=lambda x: x.get("ret_pct", 0), reverse=True):
+            ret   = p.get("ret_pct", 0)
+            sign  = "+" if ret >= 0 else ""
+            trail = " 🔒" if p.get("trailing_active") else ""
+            hours = p.get("hours_held", 0)
+            lines.append(f"  {p['ticker']:8s} <b>{sign}{ret:.1f}%</b>{trail} · {hours:.0f}h")
+    else:
+        lines.append("Sin posiciones abiertas.")
+
+    if total > 0:
+        lines += [
+            "",
+            "<b>Histórico acumulado</b>",
+            f"Trades: {total} · WR: {wr}% · P&amp;L: €{pnl:+.0f}",
+        ]
+
+    if top_signals:
+        lines += ["", "<b>Top señales ahora</b>"]
+        for r in top_signals[:3]:
+            lines.append(
+                f"  {r['ticker']:8s} score <b>{r.get('inv_score','—')}</b>"
+                f" · RSI {r.get('rsi','—')}"
+                f" · {r.get('signal','—')}"
+            )
+
+    send_message("\n".join(lines))
+
+
 def get_failures():
     return _failures

@@ -128,14 +128,17 @@ def refresh_data():
         row_map = {}
         with ThreadPoolExecutor(max_workers=10) as ex:
             futures = {ex.submit(indicators.fetch_ticker, name, ticker): (g, ticker) for g, name, ticker in all_tasks}
-            # timeout=45s por ticker — evita que un ticker lento bloquee el ciclo entero
-            for fut in as_completed(futures, timeout=45):
-                g, ticker = futures[fut]
-                try:
-                    row = fut.result(timeout=5)
-                    if row: row_map[ticker] = (g, row)
-                except Exception as e:
-                    log.warning("fetch %s: %s", ticker, e)
+            # timeout=120s total — con 107 tickers y posibles reintentos por 429
+            try:
+                for fut in as_completed(futures, timeout=120):
+                    g, ticker = futures[fut]
+                    try:
+                        row = fut.result(timeout=30)
+                        if row: row_map[ticker] = (g, row)
+                    except Exception as e:
+                        log.warning("fetch %s: %s", ticker, e)
+            except TimeoutError:
+                log.warning("as_completed timeout — usando %d tickers ya recibidos", len(row_map))
 
         result = {g: [] for g in GROUPS}
         strong_buys = []
@@ -230,9 +233,44 @@ def background_refresh():
                     log.error("paper2 error: %s", e)
             gc.collect()
 
-            # ── Informe semanal — lunes entre 08:00 y 09:00 UTC ──────────────
+            # ── Informe diario — cada día a las 22:00 UTC (cierre US) ──────
             now_utc = datetime.utcnow()
             today   = now_utc.date()
+            if (now_utc.weekday() < 5 and now_utc.hour == 22 and now_utc.minute < 10
+                    and getattr(background_refresh, "_last_daily_date", None) != today):
+                background_refresh._last_daily_date = today
+                try:
+                    cache_lock.read_acquire()
+                    try:
+                        _mdata = cache.get("data") or {}
+                    finally:
+                        cache_lock.read_release()
+                    _positions = storage.get_open_positions()
+                    _cap       = storage.get_capital()
+                    _stats     = storage.get_performance_stats()
+                    _vix       = indicators.get_vix_sma5()
+                    _regime    = indicators.get_spy_regime().get("regime", "—")
+                    _all_rows  = [r for rows in _mdata.values() for r in rows]
+                    _top = sorted(
+                        [r for r in _all_rows if isinstance(r.get("inv_score"), (int, float))],
+                        key=lambda r: r["inv_score"], reverse=True
+                    )[:5]
+                    _open_val = sum(
+                        p.get("shares", 0) * p.get("current_price", p.get("entry_price", 0))
+                        for p in _positions
+                    )
+                    _equity   = round(_cap + _open_val, 2)
+                    _total_ret = round((_equity - PAPER2_INITIAL_CAP) / PAPER2_INITIAL_CAP * 100, 2)
+                    threading.Thread(
+                        target=telegram_alerts.send_daily_summary,
+                        args=(_positions, _cap, _stats, _vix, _regime, _top, _equity, _total_ret),
+                        daemon=True,
+                    ).start()
+                    log.info("Resumen diario Telegram enviado")
+                except Exception as e:
+                    log.error("Error enviando resumen diario: %s", e)
+
+            # ── Informe semanal — lunes entre 08:00 y 09:00 UTC ──────────────
             if (now_utc.weekday() == 0 and 8 <= now_utc.hour < 9
                     and _last_weekly_date != today):
                 _last_weekly_date = today
@@ -703,6 +741,16 @@ def api_summary():
                         headers={"Cache-Control": "no-store"})
     except Exception as e:
         return Response(f"Error: {e}", mimetype="text/plain"), 500
+
+
+@app.route("/api/watchlist")
+def api_watchlist():
+    """Tickers en zona de vigilancia (score 70-84) — próximos a señal."""
+    try:
+        items = storage.get_watchlist(limit=30)
+        return jsonify({"watchlist": items, "count": len(items)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/ping")
