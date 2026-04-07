@@ -493,12 +493,37 @@ def dist_cache_get(ticker):   return cache_get(_DIST_CACHE, _dist_lock, ticker)
 def dist_cache_set(ticker, data):  cache_set(_DIST_CACHE, _dist_lock, ticker, data)
 
 # ── FETCH TICKER (main data function) ────────────────────────────────────────
+def _yf_history_with_retry(ticker_obj, **kwargs):
+    """Descarga histórico con retry automático en caso de rate limit (429).
+    Backoff exponencial: 2s, 4s, 8s — máximo 3 intentos.
+    """
+    import time as _time
+    for attempt in range(3):
+        try:
+            result = ticker_obj.history(**kwargs)
+            if not result.empty:
+                return result
+            if attempt < 2:
+                _time.sleep(2 ** attempt)
+        except Exception as e:
+            err_str = str(e).lower()
+            if '429' in err_str or 'too many' in err_str or 'rate' in err_str:
+                wait = 2 ** (attempt + 1)
+                log.warning("[yfinance] rate limit en %s — esperando %ds", ticker_obj.ticker, wait)
+                _time.sleep(wait)
+            elif attempt == 2:
+                raise
+            else:
+                _time.sleep(1)
+    return ticker_obj.history(**kwargs)  # último intento sin captura
+
+
 def fetch_ticker(name, ticker):
     """Fetch all indicators for a single ticker. Returns dict or None."""
     try:
         t   = yf.Ticker(ticker, session=_YF_SESSION)
         now = datetime.now()
-        _hist_raw = t.history(period="1y", auto_adjust=True)
+        _hist_raw = _yf_history_with_retry(t, period="1y", auto_adjust=True)
         if _hist_raw.empty:
             return None
         _hist_raw.index = _hist_raw.index.tz_localize(None) if _hist_raw.index.tzinfo else _hist_raw.index

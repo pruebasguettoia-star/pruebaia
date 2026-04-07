@@ -128,10 +128,11 @@ def refresh_data():
         row_map = {}
         with ThreadPoolExecutor(max_workers=10) as ex:
             futures = {ex.submit(indicators.fetch_ticker, name, ticker): (g, ticker) for g, name, ticker in all_tasks}
-            for fut in as_completed(futures):
+            # timeout=45s por ticker — evita que un ticker lento bloquee el ciclo entero
+            for fut in as_completed(futures, timeout=45):
                 g, ticker = futures[fut]
                 try:
-                    row = fut.result()
+                    row = fut.result(timeout=5)
                     if row: row_map[ticker] = (g, row)
                 except Exception as e:
                     log.warning("fetch %s: %s", ticker, e)

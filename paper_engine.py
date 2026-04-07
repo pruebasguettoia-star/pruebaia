@@ -150,7 +150,8 @@ def run_trading(market_data):
                 # ── Salida parcial al activar trailing ────────────────────────
                 # Vender PARTIAL_SELL_PCT de la posición, dejar el resto correr
                 if PARTIAL_SELL_ENABLED and pos["shares"] > 0:
-                    shares_to_sell  = pos["shares"] * PARTIAL_SELL_PCT
+                    shares_to_sell  = round(pos["shares"] * PARTIAL_SELL_PCT, 6)
+                    shares_to_sell  = min(shares_to_sell, pos["shares"])  # guardia anti-negativo
                     eur_partial     = shares_to_sell * _to_eur(current_price, currency)
                     pnl_partial_eur = shares_to_sell * (
                         _to_eur(current_price, currency) - _to_eur(pos["entry_price"], currency)
@@ -348,6 +349,9 @@ def run_trading(market_data):
                 if ticker in NON_TRADEABLE: continue
                 if ticker in cooldowns or ticker in open_tickers: continue
                 if not is_market_open(ticker): continue
+                # Releer capital de DB en cada iteración para evitar desincronización
+                # si una entrada previa falló a mitad o si el ciclo tarda varios segundos
+                capital = storage.get_capital()
 
                 score = row.get("inv_score")
 
@@ -403,11 +407,13 @@ def run_trading(market_data):
                 if position_size < 1 or capital < position_size:
                     continue
 
+                currency = "EUR"  # valor por defecto — evita shadowing entre iteraciones
                 fx = get_eurusd()
                 if ticker in ALPACA_TRADEABLE and fx > 0:
-                    native_price = round(row["price"] / fx, 4); currency = "USD"
+                    native_price = round(row["price"] / fx, 4)
+                    currency = "USD"
                 else:
-                    native_price = row["price"]; currency = "EUR"
+                    native_price = row["price"]
 
                 # shares se calcula sobre el precio nativo para que el P&L
                 # (shares × Δnative) sea consistente con la divisa de entry_price.
@@ -464,7 +470,8 @@ def sell_manual(ticker, market_data):
         currency = pos.get("currency", "EUR")
         current_price = _to_native(row["price"], currency) if row else pos["entry_price"]
         ret_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
-        eur_exit_price  = row["price"] if row else _to_eur(current_price, currency)
+        # Siempre convertir a EUR para P&L consistente — row["price"] puede ser USD
+        eur_exit_price  = _to_eur(current_price, currency)
         eur_entry_price = _to_eur(pos["entry_price"], currency)
         pnl_eur = pos["shares"] * (eur_exit_price - eur_entry_price)
         storage.add_capital(pos["shares"] * eur_exit_price)
@@ -527,11 +534,11 @@ def get_read_only_state(market_data):
         pos["trailing_drop"] = round(trailing_drop, 2)
         pos["waiting_recovery"] = (hours_held >= hold_hrs_ro and ret_pct < 0 and hours_held < max_hrs_ro)
 
+    # open_value en EUR: usar current_price ya calculado (en divisa nativa) y convertir
     open_value = sum(
-        p["shares"] * (
-            ticker_map[p["ticker"]]["price"]
-            if p["ticker"] in ticker_map
-            else _to_eur(p["entry_price"], p.get("currency", "EUR"))
+        p["shares"] * _to_eur(
+            p.get("current_price", p["entry_price"]),
+            p.get("currency", "EUR")
         )
         for p in positions
     )
