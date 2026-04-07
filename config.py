@@ -77,13 +77,13 @@ ATR_STOP_MAX  = 10.0       # stop máximo (activos muy volátiles: COIN, ARKK)
 # extender el hold máximo a HOLD_EXT_MAX_HOURS (en vez de MAX_HOURS)
 HOLD_EXT_SCORE     = 88     # score mínimo para extensión
 HOLD_EXT_RET_PCT   = 3.0   # ret mínimo en % para extensión
-HOLD_EXT_MAX_HOURS = 72.0  # hold máximo extendido
+HOLD_EXT_MAX_HOURS = 84.0  # hold máximo extendido (>MOM_MAX_HOURS=72 para añadir valor)
 
 # ── PYRAMIDING ───────────────────────────────────────────────────────────────
 # Si una posición lleva ≥PYRA_MIN_RET% y ≥PYRA_MIN_HOURS,
 # y el score sigue ≥PYRA_MIN_SCORE, añadir una segunda entrada de PYRA_SIZE_PCT
 PYRA_ENABLED      = True
-PYRA_MIN_RET      = 3.0    # ret mínimo para activar pyramiding
+PYRA_MIN_RET      = 4.0    # ret mínimo para activar pyramiding (>BEAR_PANIC take_profit=3.0)
 PYRA_MIN_HOURS    = 8.0    # horas mínimas en posición antes de añadir
 PYRA_MIN_SCORE    = 85     # score mínimo en el momento de añadir
 PYRA_SIZE_PCT     = 0.05   # 5% del capital por pyramid (mitad de la entrada inicial)

@@ -229,6 +229,15 @@ def get_open_positions():
     rows = _conn().execute("SELECT * FROM open_pos ORDER BY entry_date").fetchall()
     return [_row_to_dict(r) for r in rows]
 
+# Alias para compatibilidad con migrate_from_json y código legado
+def add_open_position(pos):
+    """Alias de atomic_open_position sin deducir capital — solo para migración JSON."""
+    cost_eur = pos.get("shares", 0) * pos.get("entry_price", 0)
+    try:
+        atomic_open_position(pos, cost_eur)
+    except Exception as e:
+        log.warning("add_open_position fallback: %s", e)
+
 
 def atomic_open_position(pos, cost_eur):
     """Resta capital y añade posición en una sola transacción — evita estado corrupto."""

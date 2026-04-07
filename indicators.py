@@ -14,6 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 log = logging.getLogger("tracker")
 
 import yfinance as yf
+import requests
+
+# Sesión requests con timeout global para todas las llamadas yfinance
+# Evita que hilos de refresh queden bloqueados indefinidamente
+_YF_SESSION = requests.Session()
+_YF_SESSION.request = lambda method, url, **kwargs: requests.Session.request(
+    _YF_SESSION, method, url, timeout=kwargs.pop("timeout", 20), **kwargs
+)
 
 from config import (
     GROUPS, USD_TICKERS, INTRADAY_TTL, FUND_TTL, FUND_MAX,
@@ -67,7 +75,7 @@ def get_fundamentals(ticker):
     pe_ratio = div_yield = beta = None
     full = None
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_YF_SESSION)
         info = t.fast_info
         pe_raw = getattr(info, "pe_ratio", None)
         if pe_raw and pe_raw > 0:
@@ -123,7 +131,8 @@ def _get_hist5y(ticker, t):
     except Exception:
         data = None
     with _hist5y_lock:
-        if len(_hist5y_cache) > 150:  # limpiar si crece demasiado
+        # Evicción LRU: máximo 120 tickers en caché (83 tickers + margen)
+        if len(_hist5y_cache) >= 120:
             oldest = min(_hist5y_cache, key=lambda k: _hist5y_cache[k]["ts"])
             _hist5y_cache.pop(oldest, None)
         _hist5y_cache[ticker] = {"ts": now, "data": data}
@@ -146,7 +155,7 @@ def fetch_intraday(ticker):
         if hit and (_now - hit[0]) < INTRADAY_TTL:
             return hit[1]
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_YF_SESSION)
         intra = t.history(period="5d", interval="1h", auto_adjust=True)
         if intra.empty or len(intra) < 2:
             return None, None, None, None, None, None
@@ -188,12 +197,17 @@ def fetch_intraday(ticker):
         return None, None, None, None, None, None
 
 def purge_intraday_cache():
-    """Purga entradas expiradas del intraday cache."""
+    """Purga entradas expiradas del intraday cache. Límite máximo 120 entradas."""
     _now = time.monotonic()
     with _intraday_lock:
         expired = [k for k, v in _intraday_cache.items() if (_now - v[0]) > INTRADAY_TTL * 3]
         for k in expired:
             _intraday_cache.pop(k, None)
+        # Evicción por tamaño: si supera 120 entradas, eliminar las más antiguas
+        if len(_intraday_cache) > 120:
+            overflow = sorted(_intraday_cache, key=lambda k: _intraday_cache[k][0])
+            for k in overflow[:len(_intraday_cache) - 100]:
+                _intraday_cache.pop(k, None)
     if expired:
         log.debug("purgadas %d entradas intraday", len(expired))
 
@@ -213,7 +227,7 @@ def calc_atr_pct(ticker, hist=None):
             return hit[1]
     try:
         if hist is None or hist.empty or len(hist) < 15:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(ticker, session=_YF_SESSION)
             hist = t.history(period="1mo", auto_adjust=True)
         if hist.empty or len(hist) < 15:
             return None
@@ -231,6 +245,10 @@ def calc_atr_pct(ticker, hist=None):
         if price > 0 and math.isfinite(atr):
             atr_pct = round(atr / price * 100, 2)
             with _atr_lock:
+                # Evicción por tamaño: máximo 150 entradas
+                if len(_atr_cache) >= 150:
+                    oldest = min(_atr_cache, key=lambda k: _atr_cache[k][0])
+                    _atr_cache.pop(oldest, None)
                 _atr_cache[ticker] = (time.monotonic(), atr_pct)
             return atr_pct
     except Exception:
@@ -266,7 +284,7 @@ def _refresh_spy_cache():
 
     for sym in ("SPY", "URTH"):
         try:
-            t = yf.Ticker(sym)
+            t = yf.Ticker(sym, session=_YF_SESSION)
             hist = t.history(period="6mo", auto_adjust=True)
             if hist.empty or len(hist) < 50:
                 result[sym] = {"price": None, "sma50": None, "above": None}
@@ -286,7 +304,7 @@ def _refresh_spy_cache():
     vix_current = None
     vix_sma5    = None
     try:
-        vix_hist = yf.Ticker("^VIX").history(period="1mo", auto_adjust=True)
+        vix_hist = yf.Ticker("^VIX", session=_YF_SESSION).history(period="1mo", auto_adjust=True)
         if not vix_hist.empty and len(vix_hist) >= 5:
             vix_hist.index = vix_hist.index.tz_localize(None) if vix_hist.index.tzinfo else vix_hist.index
             vix_close   = vix_hist["Close"]
@@ -375,6 +393,10 @@ def get_spy_regime():
     with _spy_unified_lock:
         if _spy_unified_cache["regime"] is not None and (now - _spy_unified_cache["ts"]) < _REGIME_TTL:
             return _spy_unified_cache["regime"]
+        # Si los datos llevan >30min sin actualizarse (fallo red), forzar reset en próximo intento
+        if _spy_unified_cache["ts"] > 0 and (now - _spy_unified_cache["ts"]) > _REGIME_TTL * 2:
+            log.warning("[spy_cache] datos stale >30min — forzando recarga")
+            _spy_unified_cache["ts"] = 0
     _refresh_spy_cache()
     with _spy_unified_lock:
         return _spy_unified_cache["regime"] or {"regime": "dip_buying", "note": "Sin datos"}
@@ -474,7 +496,7 @@ def dist_cache_set(ticker, data):  cache_set(_DIST_CACHE, _dist_lock, ticker, da
 def fetch_ticker(name, ticker):
     """Fetch all indicators for a single ticker. Returns dict or None."""
     try:
-        t   = yf.Ticker(ticker)
+        t   = yf.Ticker(ticker, session=_YF_SESSION)
         now = datetime.now()
         _hist_raw = t.history(period="1y", auto_adjust=True)
         if _hist_raw.empty:
