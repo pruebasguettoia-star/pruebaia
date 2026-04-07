@@ -64,22 +64,25 @@ def _conn():
 
 
 def init_db():
-    """Crea las tablas si no existen."""
+    """Crea las tablas si no existen.
+    Usa execute() individual en vez de executescript() para evitar
+    conflictos de transacción con SQLite WAL mode en Railway Volumes.
+    """
     conn = _conn()
-    # Cerrar cualquier transacción pendiente antes de executescript
+    # Cancelar cualquier transacción pendiente antes de crear tablas
     try:
-        conn.commit()
+        conn.rollback()
     except Exception:
         pass
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS state (
+
+    stmts = [
+        """CREATE TABLE IF NOT EXISTS state (
             id INTEGER PRIMARY KEY CHECK(id=1),
             capital REAL NOT NULL DEFAULT 10000.0,
             alerted_json TEXT NOT NULL DEFAULT '[]'
-        );
-        INSERT OR IGNORE INTO state (id, capital, alerted_json) VALUES (1, 10000.0, '[]');
-
-        CREATE TABLE IF NOT EXISTS open_pos (
+        )""",
+        "INSERT OR IGNORE INTO state (id, capital, alerted_json) VALUES (1, 10000.0, '[]')",
+        """CREATE TABLE IF NOT EXISTS open_pos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
             name TEXT,
@@ -100,9 +103,8 @@ def init_db():
             waiting_recovery INTEGER DEFAULT 0,
             trade_mode TEXT DEFAULT 'dip_buying',
             pyramid_count INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS closed_pos (
+        )""",
+        """CREATE TABLE IF NOT EXISTS closed_pos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
             name TEXT,
@@ -121,27 +123,31 @@ def init_db():
             hours_held REAL,
             trailing_active INTEGER DEFAULT 0,
             trailing_pct REAL,
-            is_partial INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS equity_log (
+            is_partial INTEGER DEFAULT 0,
+            trade_mode TEXT DEFAULT 'dip_buying'
+        )""",
+        """CREATE TABLE IF NOT EXISTS equity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
             equity REAL NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS cooldowns (
+        )""",
+        """CREATE TABLE IF NOT EXISTS cooldowns (
             ticker TEXT PRIMARY KEY,
             until_date TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_closed_exit_date ON closed_pos(exit_date);
-        CREATE INDEX IF NOT EXISTS idx_closed_ticker    ON closed_pos(ticker);
-        CREATE INDEX IF NOT EXISTS idx_closed_partial   ON closed_pos(is_partial);
-        CREATE INDEX IF NOT EXISTS idx_open_ticker      ON open_pos(ticker);
-        CREATE INDEX IF NOT EXISTS idx_cooldowns_until  ON cooldowns(until_date);
-    """)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_closed_exit_date ON closed_pos(exit_date)",
+        "CREATE INDEX IF NOT EXISTS idx_closed_ticker    ON closed_pos(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_closed_partial   ON closed_pos(is_partial)",
+        "CREATE INDEX IF NOT EXISTS idx_open_ticker      ON open_pos(ticker)",
+        "CREATE INDEX IF NOT EXISTS idx_cooldowns_until  ON cooldowns(until_date)",
+    ]
+    for stmt in stmts:
+        try:
+            conn.execute(stmt)
+        except Exception as e:
+            log.warning("init_db stmt ignorado: %s", e)
     conn.commit()
+
     # ── Migraciones — añadir columnas nuevas si la DB ya existía sin ellas ──────
     _migrations = [
         # open_pos
@@ -249,22 +255,18 @@ def atomic_open_position(pos, cost_eur):
 
 
 def partial_close(ticker, shares_sold, cost_recovered_eur):
-    """Reduce las shares de una posición abierta (salida parcial) y devuelve capital.
-    Transacción atómica — evita estado inconsistente.
-    """
+    """Reduce las shares de una posición abierta (salida parcial) y devuelve capital."""
     if shares_sold <= 0:
         log.warning("partial_close: shares_sold=%.6f inválido para %s", shares_sold, ticker)
         return
     conn = _conn()
-    # Verificar que quedan suficientes shares antes de reducir
     row = conn.execute("SELECT shares FROM open_pos WHERE ticker=?", (ticker,)).fetchone()
     if row is None:
         log.warning("partial_close: posición %s no encontrada", ticker)
         return
     if float(row["shares"]) < shares_sold - 1e-9:
-        # Seguridad: no dejar shares negativas — vender solo lo que hay
         shares_sold = float(row["shares"])
-        cost_recovered_eur = shares_sold  # valor mínimo aproximado, no debería ocurrir
+        cost_recovered_eur = shares_sold
         log.warning("partial_close: ajustando shares_sold a %.6f para %s", shares_sold, ticker)
     conn.execute("UPDATE state SET capital = capital + ? WHERE id=1", (round(cost_recovered_eur, 6),))
     conn.execute(
@@ -275,10 +277,7 @@ def partial_close(ticker, shares_sold, cost_recovered_eur):
 
 
 def atomic_pyramid(ticker, extra_shares, native_cost):
-    """Añade shares a una posición existente (pyramiding) y resta capital.
-    native_cost: coste en moneda nativa del activo (USD para US stocks, EUR para EU).
-    Actualiza entry_price con precio promedio ponderado para que ret_pct y stop sean correctos.
-    """
+    """Añade shares a una posición existente (pyramiding) y resta capital."""
     conn = _conn()
     row = conn.execute(
         "SELECT shares, entry_price FROM open_pos WHERE ticker=?", (ticker,)
@@ -291,7 +290,6 @@ def atomic_pyramid(ticker, extra_shares, native_cost):
     extra_entry = native_cost / extra_shares if extra_shares > 0 else orig_entry
     total_shares = orig_shares + extra_shares
     avg_entry = (orig_shares * orig_entry + extra_shares * extra_entry) / total_shares if total_shares > 0 else orig_entry
-    # El capital lo deduce el caller (paper_engine) vía add_capital(-pyra_size)
     conn.execute("""
         UPDATE open_pos
         SET shares = shares + ?,
@@ -328,8 +326,9 @@ def add_closed_trade(trade):
     _conn().execute("""
         INSERT INTO closed_pos (ticker, name, entry_date, exit_date, entry_price,
             exit_price, peak_price, currency, shares, ret_pct, pnl, pnl_eur,
-            reason, entry_score, hours_held, trailing_active, trailing_pct, is_partial)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reason, entry_score, hours_held, trailing_active, trailing_pct,
+            is_partial, trade_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         trade["ticker"], trade.get("name"), trade["entry_date"], trade["exit_date"],
         trade["entry_price"], trade["exit_price"], trade.get("peak_price"),
@@ -338,6 +337,7 @@ def add_closed_trade(trade):
         trade.get("entry_score"), trade.get("hours_held"),
         int(trade.get("trailing_active", False)), trade.get("trailing_pct"),
         int(trade.get("is_partial", False)),
+        trade.get("trade_mode", "dip_buying"),
     ))
     _conn().commit()
 
@@ -365,17 +365,12 @@ def get_trades_by_period(start_date, end_date=None):
 
 
 def get_performance_stats():
-    """Estadísticas de rendimiento globales y por periodo.
-    Las salidas parciales (is_partial=1) se excluyen de win_rate y avg_ret
-    porque siempre son positivas (se activan al llegar al take_profit),
-    lo que sesgaría artificialmente las métricas.
-    """
+    """Estadísticas de rendimiento globales y por periodo."""
     conn = _conn()
     total = conn.execute("SELECT COUNT(*) as n FROM closed_pos").fetchone()["n"]
     if total == 0:
         return {"total_trades": 0}
 
-    # Stats sobre trades completos únicamente (excluye parciales)
     stats = conn.execute("""
         SELECT
             COUNT(*) as total_trades,
@@ -392,12 +387,10 @@ def get_performance_stats():
         WHERE COALESCE(is_partial, 0) = 0
     """).fetchone()
 
-    # Contar parciales por separado para info
     partial_count = conn.execute(
         "SELECT COUNT(*) as n, ROUND(SUM(pnl_eur),2) as pnl FROM closed_pos WHERE COALESCE(is_partial,0)=1"
     ).fetchone()
 
-    # Rendimiento por mes — incluye parciales en PnL (dinero real) pero no en trade count
     monthly = conn.execute("""
         SELECT
             SUBSTR(exit_date, 1, 7) as month,
@@ -411,7 +404,6 @@ def get_performance_stats():
         ORDER BY month
     """).fetchall()
 
-    # Rendimiento por semana
     weekly = conn.execute("""
         SELECT
             SUBSTR(exit_date, 1, 10) as week_start,
@@ -424,7 +416,6 @@ def get_performance_stats():
         ORDER BY week_start
     """).fetchall()
 
-    # Top razones de salida (excluye parciales — tendrían su propia razón uniforme)
     reasons = conn.execute("""
         SELECT reason, COUNT(*) as n, ROUND(AVG(ret_pct), 2) as avg_ret
         FROM closed_pos
@@ -447,7 +438,6 @@ def get_performance_stats():
 # ── EQUITY LOG ────────────────────────────────────────────────────────────────
 def add_equity_snapshot(equity):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    # Throttle: solo un snapshot por hora para reducir escrituras en Railway
     last = _conn().execute(
         "SELECT date FROM equity_log ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -455,11 +445,10 @@ def add_equity_snapshot(equity):
         try:
             last_dt = datetime.strptime(last["date"], "%Y-%m-%d %H:%M")
             if (datetime.now() - last_dt).total_seconds() < 3600:
-                return  # Ya hay un snapshot reciente — omitir
+                return
         except Exception:
             pass
     _conn().execute("INSERT INTO equity_log (date, equity) VALUES (?, ?)", (now_str, round(equity, 2)))
-    # Mantener solo últimos 2000 registros
     _conn().execute("""
         DELETE FROM equity_log WHERE id NOT IN (
             SELECT id FROM equity_log ORDER BY id DESC LIMIT 2000
@@ -496,10 +485,7 @@ def clean_expired_cooldowns():
 
 
 def get_cooldowns_trailing():
-    """Devuelve cooldowns activos {ticker: until_date}.
-    Usado para la liberación anticipada de cooldowns de trailing (no stop loss).
-    Alias de get_cooldowns() con nombre más preciso.
-    """
+    """Alias de get_cooldowns() con nombre más preciso."""
     rows = _conn().execute("SELECT ticker, until_date FROM cooldowns").fetchall()
     return {r["ticker"]: r["until_date"] for r in rows}
 
@@ -513,31 +499,34 @@ def remove_cooldown(ticker):
 # ── RESET ─────────────────────────────────────────────────────────────────────
 def reset_all():
     conn = _conn()
-    conn.executescript("""
-        DELETE FROM open_pos;
-        DELETE FROM closed_pos;
-        DELETE FROM equity_log;
-        DELETE FROM cooldowns;
-        UPDATE state SET capital = 10000.0 WHERE id=1;
-    """)
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+    for stmt in [
+        "DELETE FROM open_pos",
+        "DELETE FROM closed_pos",
+        "DELETE FROM equity_log",
+        "DELETE FROM cooldowns",
+        "UPDATE state SET capital = 10000.0 WHERE id=1",
+    ]:
+        try:
+            conn.execute(stmt)
+        except Exception as e:
+            log.warning("reset stmt ignorado: %s", e)
     conn.commit()
     log.info("reset completo")
 
 
 # ── EXPORT CSV ────────────────────────────────────────────────────────────────
 def export_trades_csv():
-    """Exporta trades cerrados como CSV string.
-    Las salidas parciales (is_partial=1) se incluyen con esa columna visible
-    para que el análisis externo pueda filtrarlas.
-    """
+    """Exporta trades cerrados como CSV string."""
     rows = _conn().execute(
         "SELECT * FROM closed_pos ORDER BY exit_date"
     ).fetchall()
     if not rows:
         return "No trades\n"
-
     cols = list(rows[0].keys())
-    # Asegurar que is_partial aparece como columna — puede no existir en DBs antiguas
     lines = [",".join(cols)]
     for r in rows:
         lines.append(",".join(str(r[c]) if r[c] is not None else "0" if c == "is_partial" else "" for c in cols))
@@ -554,36 +543,23 @@ def migrate_from_json(json_path):
         with open(json_path) as f:
             data = json.load(f)
         conn = _conn()
-
-        # Capital
         conn.execute("UPDATE state SET capital=? WHERE id=1", (data.get("capital", PAPER2_INITIAL_CAP),))
-
-        # Open positions
         for pos in data.get("open", []):
-            pos.setdefault("pyramid_count", 0)   # evita TypeError en engine al leer NULL
+            pos.setdefault("pyramid_count", 0)
             add_open_position(pos)
-
-        # Closed trades
         for trade in data.get("closed", []):
             if "pnl_eur" not in trade:
-                trade["pnl_eur"] = trade.get("pnl")  # fallback
+                trade["pnl_eur"] = trade.get("pnl")
             add_closed_trade(trade)
-
-        # Equity log
         for entry in data.get("equity_log", [])[-500:]:
             conn.execute("INSERT INTO equity_log (date, equity) VALUES (?, ?)",
                          (entry["date"], entry["equity"]))
-
-        # Cooldowns
         for ticker, until in data.get("cooldowns", {}).items():
             set_cooldown(ticker, until)
-
         conn.commit()
         n_open = len(data.get("open", []))
         n_closed = len(data.get("closed", []))
         log.info("migrado JSON → SQLite: %d abiertas, %d cerradas", n_open, n_closed)
-
-        # Renombrar JSON para evitar re-migración
         os.rename(json_path, json_path + ".migrated")
         return True
     except Exception as e:
@@ -596,7 +572,6 @@ def _row_to_dict(row):
     if row is None:
         return {}
     d = dict(row)
-    # Convertir booleanos de SQLite (0/1) a Python
     for k in ("trailing_active", "waiting_recovery"):
         if k in d and isinstance(d[k], int):
             d[k] = bool(d[k])
