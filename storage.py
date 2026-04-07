@@ -66,6 +66,11 @@ def _conn():
 def init_db():
     """Crea las tablas si no existen."""
     conn = _conn()
+    # Cerrar cualquier transacción pendiente antes de executescript
+    try:
+        conn.commit()
+    except Exception:
+        pass
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS state (
             id INTEGER PRIMARY KEY CHECK(id=1),
@@ -137,31 +142,37 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_cooldowns_until  ON cooldowns(until_date);
     """)
     conn.commit()
-    # Migración: añadir columna trade_mode si la DB ya existía sin ella
-    try:
-        conn.execute("ALTER TABLE open_pos ADD COLUMN trade_mode TEXT DEFAULT 'dip_buying'")
-        conn.commit()
-        log.info("columna trade_mode añadida a open_pos")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE open_pos ADD COLUMN pyramid_count INTEGER DEFAULT 0")
-        conn.commit()
-        log.info("columna pyramid_count añadida a open_pos")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE closed_pos ADD COLUMN is_partial INTEGER DEFAULT 0")
-        conn.commit()
-        log.info("columna is_partial añadida a closed_pos")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE state ADD COLUMN alerted_json TEXT NOT NULL DEFAULT '[]'")
-        conn.commit()
-        log.info("columna alerted_json añadida a state")
-    except Exception:
-        pass
+    # ── Migraciones — añadir columnas nuevas si la DB ya existía sin ellas ──────
+    _migrations = [
+        # open_pos
+        ("open_pos",   "peak_price",       "REAL"),
+        ("open_pos",   "trailing_drop",    "REAL DEFAULT 0"),
+        ("open_pos",   "trailing_active",  "INTEGER DEFAULT 0"),
+        ("open_pos",   "trailing_pct",     "REAL DEFAULT 2.0"),
+        ("open_pos",   "waiting_recovery", "INTEGER DEFAULT 0"),
+        ("open_pos",   "trade_mode",       "TEXT DEFAULT 'dip_buying'"),
+        ("open_pos",   "pyramid_count",    "INTEGER DEFAULT 0"),
+        ("open_pos",   "entry_score",      "INTEGER"),
+        ("open_pos",   "score",            "INTEGER"),
+        # closed_pos
+        ("closed_pos", "peak_price",       "REAL"),
+        ("closed_pos", "is_partial",       "INTEGER DEFAULT 0"),
+        ("closed_pos", "trade_mode",       "TEXT DEFAULT 'dip_buying'"),
+        ("closed_pos", "trailing_active",  "INTEGER DEFAULT 0"),
+        ("closed_pos", "trailing_pct",     "REAL"),
+        ("closed_pos", "pnl_eur",          "REAL"),
+        ("closed_pos", "hours_held",       "REAL"),
+        ("closed_pos", "entry_score",      "INTEGER"),
+        # state
+        ("state",      "alerted_json",     "TEXT NOT NULL DEFAULT '[]'"),
+    ]
+    for table, col, col_def in _migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+            conn.commit()
+            log.info("migración: columna %s.%s añadida", table, col)
+        except Exception:
+            pass  # columna ya existe — ignorar
     log.info("SQLite inicializado: %s", DB_PATH)
 
 
