@@ -32,7 +32,8 @@ import math
 import time
 import gc
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+_UTC = timezone.utc
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 from config import (
@@ -186,7 +187,7 @@ def _refresh_sleep_seconds():
     - Mercado abierto (NYSE/NASDAQ): REFRESH_INTERVAL (5 min)
     - Fuera de mercado o fin de semana: 30 min — los datos no cambian
     """
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(tz=_UTC)
     if now_utc.weekday() >= 5:  # sábado o domingo
         return 1800
     t = now_utc.hour * 60 + now_utc.minute
@@ -234,7 +235,7 @@ def background_refresh():
             gc.collect()
 
             # ── Informe diario — cada día a las 22:00 UTC (cierre US) ──────
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(tz=_UTC)
             today   = now_utc.date()
             if (now_utc.weekday() < 5 and now_utc.hour == 22 and now_utc.minute < 10
                     and getattr(background_refresh, "_last_daily_date", None) != today):

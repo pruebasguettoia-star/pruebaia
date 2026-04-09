@@ -5,7 +5,8 @@ Usa SQLite (storage.py) en vez de JSON.
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+_UTC = timezone.utc
 
 from config import (
     PAPER2_FILE, PAPER2_INITIAL_CAP, PAPER2_POSITION_PCT, PAPER2_MIN_SCORE,
@@ -20,7 +21,7 @@ from config import (
     COOLDOWN_STOP_HOURS, COOLDOWN_TRAILING_HOURS,
     POS_VOL_LOW_ATR, POS_VOL_MED_ATR,
     POS_PCT_LOW_VOL, POS_PCT_MED_VOL, POS_PCT_HIGH_VOL,
-    PARTIAL_SELL_ENABLED, PARTIAL_SELL_PCT,
+    PARTIAL_SELL_ENABLED, TRANCHE_1_PCT, TRANCHE_2_PCT,
     NON_TRADEABLE,
     POS_SIZE_ON_INITIAL_CAP,
     EARLY_EXIT_ENABLED, EARLY_EXIT_MIN_HOURS, EARLY_EXIT_MIN_RET, EARLY_EXIT_MAX_SCORE,
@@ -30,6 +31,13 @@ from config import (
     RSI_DIV_ENABLED, RSI_DIV_MIN_SCORE,
     DIV_YIELD_ENABLED, DIV_YIELD_MIN_PCT, DIV_MIN_SCORE,
     BONDS_ENABLED, BONDS_MIN_SCORE, BONDS_TICKERS,
+    SECTOR_LIMIT_ENABLED, SECTOR_MAX_POSITIONS, SECTOR_MAP,
+    GAP_FILTER_ENABLED, GAP_FILTER_PCT,
+    PROGRESSIVE_TRAILING_ENABLED, PROGRESSIVE_TRAILING,
+    RATCHET_ENABLED, RATCHET_LEVELS,
+    DCA_ENTRY_ENABLED, DCA_TRANCHE_1_PCT, DCA_TRANCHE_2_PCT,
+    DCA_TRANCHE_2_HOURS, DCA_TRANCHE_3_PCT, DCA_TRANCHE_3_HOURS,
+    DCA_MIN_SCORE_HOLD,
 )
 from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, get_vix_sma5, is_momentum_candidate, calc_atr_pct
 import alpaca_api
@@ -45,7 +53,7 @@ _tg_pool     = ThreadPoolExecutor(max_workers=3, thread_name_prefix="tg")
 _alpaca_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="alpaca")
 
 def is_market_open(ticker):
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(tz=_UTC)
     if now_utc.weekday() >= 5:
         return False
     t = now_utc.hour * 60 + now_utc.minute
@@ -87,6 +95,7 @@ def run_trading(market_data):
     with paper2_lock:
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%d %H:%M")
+        _utc_now = datetime.now(tz=_UTC)  # para checks de horario de mercado
         ticker_map = {}
         for group_rows in market_data.values():
             for row in group_rows:
@@ -108,20 +117,28 @@ def run_trading(market_data):
             peak_price = pos.get("peak_price", pos["entry_price"])
             if current_price > peak_price: peak_price = current_price
             trailing_drop = (current_price - peak_price) / peak_price * 100
-            trailing_pct = pos.get("trailing_pct") or get_trailing_pct(ticker)
 
-            # ── MEJORA: Trailing asimétrico por hora de cierre ───────────────
-            # Si quedan <45min para cierre US y hay ganancia, apretar trailing
-            # para asegurar beneficios antes del gap nocturno
-            if trailing_active and ret_pct > 0 and ticker not in EU_TICKERS:
-                _mins_utc = now_dt.utctimetuple().tm_hour * 60 + now_dt.utctimetuple().tm_min
-                # Cierre US aprox 20:30-21:00 UTC — apretar trailing a partir de 20:15
-                if 20*60+15 <= _mins_utc <= 21*60:
-                    trailing_pct = round(max(trailing_pct * 0.55, 0.8), 2)  # mínimo 0.8%
-
+            # ── VARIABLES — definir ANTES de usar (fix critical bug) ─────────
             exit_reason = None
             trailing_active = bool(pos.get("trailing_active", False))
             pyramid_count = int(pos.get("pyramid_count", 0))
+            tranche_2_done = bool(pos.get("tranche_2_done", False))
+
+            # ── RATCHET FLOOR — suelo de ganancia que solo sube ───────────────
+            # Persistido en DB como ratchet_floor (float, % de ganancia mínima)
+            ratchet_floor = float(pos.get("ratchet_floor", 0))
+            if RATCHET_ENABLED and ret_pct > 0:
+                # Recalcular el suelo: iterar niveles de menor a mayor,
+                # el suelo es el más alto que ret_pct haya cruzado
+                _new_floor = ratchet_floor
+                for _threshold, _floor in sorted(RATCHET_LEVELS.items()):
+                    if ret_pct >= _threshold:
+                        _new_floor = max(_new_floor, _floor)
+                # El suelo SOLO sube, nunca baja
+                if _new_floor > ratchet_floor:
+                    ratchet_floor = _new_floor
+                    log.debug("[ratchet] %s ret=%.1f%% → suelo subió a +%.1f%%",
+                              ticker, ret_pct, ratchet_floor)
 
             # ── Parámetros según modo ─────────────────────────────────────────
             is_mom_trade = pos.get("trade_mode") == "momentum"
@@ -131,6 +148,26 @@ def run_trading(market_data):
             # ── ATR — una sola llamada, ya cacheado desde fetch_ticker ─────────
             atr_pct = calc_atr_pct(ticker)
 
+            # ── Trailing PCT base (ATR-adaptado) ──────────────────────────────
+            trailing_pct = pos.get("trailing_pct") or get_trailing_pct(ticker)
+
+            # ── Trailing progresivo por duración del trade ────────────────────
+            # {8: 1.5, 24: 1.2, 48: 0.9, 999: 0.7} → más amplio al inicio, más ajustado después
+            if PROGRESSIVE_TRAILING_ENABLED and trailing_active:
+                _pt_mult = 1.0
+                for _pt_hours, _pt_m in sorted(PROGRESSIVE_TRAILING.items()):
+                    if hours_held <= _pt_hours:
+                        _pt_mult = _pt_m
+                        break
+                trailing_pct = round(trailing_pct * _pt_mult, 2)
+
+            # ── Trailing asimétrico por hora de cierre ────────────────────────
+            # Si quedan <45min para cierre US y hay ganancia, apretar trailing
+            if trailing_active and ret_pct > 0 and ticker not in EU_TICKERS:
+                _mins_utc = _utc_now.utctimetuple().tm_hour * 60 + _utc_now.utctimetuple().tm_min
+                if 20*60+15 <= _mins_utc <= 21*60:
+                    trailing_pct = round(max(trailing_pct * 0.55, 0.8), 2)
+
             # ── Stop dinámico por ATR ─────────────────────────────────────────
             if atr_pct is not None:
                 dynamic_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ATR_STOP_MULT * atr_pct)), 2)
@@ -138,7 +175,6 @@ def run_trading(market_data):
                 dynamic_stop = PAPER2_STOP_LOSS
 
             # ── Trailing dinámico por régimen ─────────────────────────────────
-            # BULL_QUIET activa el trailing más tarde para dejar correr tendencias
             if is_mom_trade:
                 take_profit = MOM_TAKE_PROFIT
             else:
@@ -146,7 +182,6 @@ def run_trading(market_data):
                 take_profit = TAKE_PROFIT_BY_REGIME.get(scoring_regime, PAPER2_TAKE_PROFIT)
 
             # ── Hold máximo: extensión por score ─────────────────────────────
-            # Si a las hold_hours el score es alto y hay beneficio, extender max
             if (isinstance(current_score, (int, float)) and current_score >= HOLD_EXT_SCORE
                     and ret_pct >= HOLD_EXT_RET_PCT and not is_mom_trade):
                 max_hours = HOLD_EXT_MAX_HOURS
@@ -157,11 +192,10 @@ def run_trading(market_data):
             if not trailing_active and ret_pct > take_profit:
                 trailing_active = True
                 peak_price = current_price
-                # ── Salida parcial al activar trailing ────────────────────────
-                # Vender PARTIAL_SELL_PCT de la posición, dejar el resto correr
+                # ── Tramo 1: venta parcial al activar trailing ────────────────
                 if PARTIAL_SELL_ENABLED and pos["shares"] > 0:
-                    shares_to_sell  = round(pos["shares"] * PARTIAL_SELL_PCT, 6)
-                    shares_to_sell  = min(shares_to_sell, pos["shares"])  # guardia anti-negativo
+                    shares_to_sell  = round(pos["shares"] * TRANCHE_1_PCT, 6)
+                    shares_to_sell  = min(shares_to_sell, pos["shares"])
                     eur_partial     = shares_to_sell * _to_eur(current_price, currency)
                     pnl_partial_eur = shares_to_sell * (
                         _to_eur(current_price, currency) - _to_eur(pos["entry_price"], currency)
@@ -178,7 +212,7 @@ def run_trading(market_data):
                         "ret_pct": round(ret_partial, 2),
                         "pnl": round(pnl_partial_eur, 2),
                         "pnl_eur": round(pnl_partial_eur, 2),
-                        "reason": f"Salida parcial {int(PARTIAL_SELL_PCT*100)}% al activar trailing",
+                        "reason": f"Tramo 1: {int(TRANCHE_1_PCT*100)}% al activar trailing",
                         "entry_score": pos.get("entry_score"),
                         "hours_held": round(hours_held, 1),
                         "trailing_active": True, "trailing_pct": trailing_pct,
@@ -191,20 +225,55 @@ def run_trading(market_data):
                         telegram_alerts.alert_trade_close,
                         ticker, pos.get("name", ""), round(ret_partial, 2),
                         round(pnl_partial_eur, 2),
-                        f"Parcial {int(PARTIAL_SELL_PCT*100)}%", "EUR"
+                        f"Tramo 1 ({int(TRANCHE_1_PCT*100)}%)", "EUR"
                     )
                     if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                         _alpaca_pool.submit(
                             alpaca_api.place_order, ticker, "sell", 0,
                             shares_to_sell   # qty para venta parcial
                         )
-                    log.info("[partial] %s vendido %d%% @ %.2f ret=%.1f%%", ticker, int(PARTIAL_SELL_PCT*100), current_price, ret_pct)
+                    log.info("[tranche1] %s vendido %d%% @ %.2f ret=%.1f%%", ticker, int(TRANCHE_1_PCT*100), current_price, ret_pct)
+
+            # ── Tramo 2: venta parcial al 50% del trailing stop ────────────
+            # Si el trailing está activo y ha devuelto la mitad del trailing_pct,
+            # vender otro 33% para proteger más ganancia
+            if (PARTIAL_SELL_ENABLED and trailing_active and not tranche_2_done
+                    and pos["shares"] > 0 and trailing_drop <= -(trailing_pct * 0.5)):
+                _t2_shares = round(pos["shares"] * TRANCHE_2_PCT / (1.0 - TRANCHE_1_PCT), 6)
+                _t2_shares = min(_t2_shares, pos["shares"])
+                if _t2_shares > 0:
+                    _t2_eur = _t2_shares * _to_eur(current_price, currency)
+                    _t2_pnl = _t2_shares * (_to_eur(current_price, currency) - _to_eur(pos["entry_price"], currency))
+                    storage.partial_close(ticker, _t2_shares, _t2_eur)
+                    storage.add_closed_trade({
+                        "ticker": ticker, "name": pos.get("name"),
+                        "entry_date": pos["entry_date"], "exit_date": now_str,
+                        "entry_price": pos["entry_price"], "exit_price": round(current_price, 2),
+                        "peak_price": round(peak_price, 2), "currency": currency,
+                        "shares": round(_t2_shares, 6), "ret_pct": round(ret_pct, 2),
+                        "pnl": round(_t2_pnl, 2), "pnl_eur": round(_t2_pnl, 2),
+                        "reason": f"Tramo 2: {int(TRANCHE_2_PCT*100)}% trailing -50%",
+                        "entry_score": pos.get("entry_score"), "hours_held": round(hours_held, 1),
+                        "trailing_active": True, "trailing_pct": trailing_pct, "is_partial": True,
+                    })
+                    pos = dict(pos)
+                    pos["shares"] = pos["shares"] - _t2_shares
+                    tranche_2_done = True
+                    _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""),
+                                    round(ret_pct, 2), round(_t2_pnl, 2), f"Tramo 2 ({int(TRANCHE_2_PCT*100)}%)", "EUR")
+                    if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
+                        _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0, _t2_shares)
+                    log.info("[tranche2] %s vendido %d%% @ %.2f ret=%.1f%%", ticker, int(TRANCHE_2_PCT*100), current_price, ret_pct)
 
             # Cooldown diferenciado: stop loss = fallo real (48h), trailing/score/tiempo = OK (24h)
             is_stop_loss_exit = False
             if ret_pct <= dynamic_stop:
                 exit_reason = f"Stop loss {ret_pct:.1f}% (ATR stop {dynamic_stop:.1f}%)"
                 is_stop_loss_exit = True
+            # ── Ratchet floor: si ret cayó por debajo del suelo garantizado ──
+            # Tiene prioridad sobre trailing clásico porque el suelo es más alto
+            elif RATCHET_ENABLED and ratchet_floor > 0 and ret_pct < ratchet_floor:
+                exit_reason = f"Ratchet floor: ret {ret_pct:.1f}% < suelo +{ratchet_floor:.1f}%"
             elif trailing_active and trailing_drop <= -trailing_pct:
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
             elif trailing_active and isinstance(current_score, (int, float)) and current_score < PAPER2_MIN_SCORE:
@@ -256,6 +325,49 @@ def run_trading(market_data):
                 _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
                 _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR")
             else:
+                # ── DCA: ejecutar tramos pendientes ───────────────────────────
+                # Tramo 2 tras DCA_TRANCHE_2_HOURS si score se mantiene
+                # Tramo 3 tras DCA_TRANCHE_3_HOURS si score se mantiene
+                _dca_pending = pos.get("dca_pending_eur")
+                _dca_tranche = int(pos.get("dca_tranche", 3))  # 3 = completado
+                if DCA_ENTRY_ENABLED and _dca_pending and _dca_tranche < 3:
+                    try:
+                        _total_eur = float(_dca_pending)
+                    except (TypeError, ValueError):
+                        _total_eur = 0
+                    _should_exec = False
+                    _tranche_pct = 0
+                    if _dca_tranche == 1 and hours_held >= DCA_TRANCHE_2_HOURS:
+                        _tranche_pct = DCA_TRANCHE_2_PCT
+                        _should_exec = True
+                        _next_tranche = 2
+                    elif _dca_tranche == 2 and hours_held >= DCA_TRANCHE_3_HOURS:
+                        _tranche_pct = DCA_TRANCHE_3_PCT
+                        _should_exec = True
+                        _next_tranche = 3
+                    if (_should_exec and _total_eur > 0
+                            and isinstance(current_score, (int, float))
+                            and current_score >= DCA_MIN_SCORE_HOLD):
+                        _dca_eur = _total_eur * _tranche_pct
+                        _cap_now = storage.get_capital()
+                        if _dca_eur <= _cap_now and _dca_eur >= 1:
+                            _fx = get_eurusd()
+                            if currency == "USD" and _fx > 0:
+                                _dca_native = _dca_eur / _fx
+                                _dca_shares = _dca_native / current_price if current_price > 0 else 0
+                            else:
+                                _dca_shares = _dca_eur / current_price if current_price > 0 else 0
+                                _dca_native = _dca_eur
+                            if _dca_shares > 0:
+                                storage.atomic_pyramid(ticker, _dca_shares, _dca_native)
+                                storage.add_capital(-_dca_eur)
+                                _dca_tranche = _next_tranche
+                                log.info("[dca] %s tranche %d +%.4f shares @ %.2f", ticker, _next_tranche, _dca_shares, current_price)
+                    elif _should_exec and isinstance(current_score, (int, float)) and current_score < DCA_MIN_SCORE_HOLD:
+                        # Score cayó — cancelar DCA restante
+                        _dca_tranche = 3
+                        log.info("[dca] %s cancelado — score %s < %s", ticker, current_score, DCA_MIN_SCORE_HOLD)
+
                 # ── Pyramiding ────────────────────────────────────────────────
                 # Añadir capital cuando la posición confirma momentum alcista
                 capital_now = storage.get_capital()
@@ -302,6 +414,9 @@ def run_trading(market_data):
                     "score": current_score, "trailing_active": int(trailing_active),
                     "trailing_pct": trailing_pct, "trailing_drop": round(trailing_drop, 2),
                     "waiting_recovery": int(hours_held >= hold_hours and ret_pct < 0 and hours_held < max_hours),
+                    "tranche_2_done": int(tranche_2_done),
+                    "dca_tranche": _dca_tranche if DCA_ENTRY_ENABLED else int(pos.get("dca_tranche", 3)),
+                    "ratchet_floor": round(ratchet_floor, 2),
                 })
 
         # ── Régimen de mercado ─────────────────────────────────────────────────
@@ -364,7 +479,7 @@ def run_trading(market_data):
                 # Evitar entradas en los primeros y últimos 30 min del mercado US
                 # (alta volatilidad espuria, spread elevado, órdenes institucionales de apertura/cierre)
                 if ticker not in EU_TICKERS and ticker not in FUTURES_TICKERS:
-                    _t_utc = now_dt.utctimetuple()
+                    _t_utc = _utc_now.utctimetuple()
                     _mins  = _t_utc.tm_hour * 60 + _t_utc.tm_min
                     # US open: 13:30-14:00 UTC y close: 20:30-21:00 UTC
                     if 13*60+30 <= _mins <= 14*60 or 20*60+30 <= _mins <= 21*60:
@@ -421,6 +536,25 @@ def run_trading(market_data):
                 if atr_entry is not None and atr_entry > ATR_MAX_ENTRY:
                     continue   # activo demasiado volátil ahora mismo
 
+                # ── Límite de exposición sectorial ────────────────────────────────
+                # Máximo SECTOR_MAX_POSITIONS posiciones por sector GICS
+                if SECTOR_LIMIT_ENABLED and ticker in SECTOR_MAP:
+                    _sector = SECTOR_MAP[ticker]
+                    _sector_count = sum(
+                        1 for _ot in open_tickers
+                        if SECTOR_MAP.get(_ot) == _sector
+                    )
+                    if _sector_count >= SECTOR_MAX_POSITIONS:
+                        continue   # sector saturado
+
+                # ── Filtro de gap overnight ───────────────────────────────────────
+                # Gap down > 3% = noticias negativas (earnings miss, downgrades)
+                # RSI oversold en estos casos no es fiable como en caídas graduales
+                if GAP_FILTER_ENABLED:
+                    _gap = row.get("gap_down_pct")
+                    if _gap is not None and _gap < GAP_FILTER_PCT:
+                        continue   # gap down excesivo — señal poco fiable
+
                 # ── Tamaño de posición por volatilidad (ATR) ──────────────────────
                 if atr_entry is not None and atr_entry <= POS_VOL_LOW_ATR:
                     pos_pct = POS_PCT_LOW_VOL
@@ -446,10 +580,20 @@ def run_trading(market_data):
                 # shares se calcula sobre el precio nativo para que el P&L
                 # (shares × Δnative) sea consistente con la divisa de entry_price.
                 # position_size está en EUR → convertimos al nativo antes de dividir.
-                native_position_size = position_size / fx if (currency == "USD" and fx > 0) else position_size
+                # ── DCA: entrada escalonada en 2-3 tramos ────────────────────────
+                # Tramo 1 inmediato, tramos 2-3 pendientes (se ejecutan en ciclos futuros)
+                if DCA_ENTRY_ENABLED:
+                    _dca_size = position_size * DCA_TRANCHE_1_PCT
+                else:
+                    _dca_size = position_size
+                native_position_size = _dca_size / fx if (currency == "USD" and fx > 0) else _dca_size
                 shares       = native_position_size / native_price if native_price > 0 else 0
-                notional_usd = position_size / fx if fx > 0 else position_size
+                notional_usd = _dca_size / fx if fx > 0 else _dca_size
                 trailing_pct_entry = get_trailing_pct(ticker)
+
+                _dca_pending = None
+                if DCA_ENTRY_ENABLED:
+                    _dca_pending = f"{position_size:.2f}"  # total position size en EUR
 
                 storage.atomic_open_position({
                     "ticker": ticker, "name": row["name"], "entry_date": now_str,
@@ -460,8 +604,10 @@ def run_trading(market_data):
                     "hours_held": 0.0, "hours_left": float(PAPER2_HOLD_HOURS),
                     "entry_score": score, "score": score, "waiting_recovery": False,
                     "trade_mode": trade_mode,
-                }, cost_eur=position_size)
-                capital -= position_size
+                    "dca_pending_eur": _dca_pending,
+                    "dca_tranche": 1,
+                }, cost_eur=_dca_size)
+                capital -= _dca_size
                 open_tickers.add(ticker)
                 if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                     _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
@@ -580,6 +726,13 @@ def get_read_only_state(market_data):
         pos["score"] = row.get("inv_score")
         pos["trailing_drop"] = round(trailing_drop, 2)
         pos["waiting_recovery"] = (hours_held >= hold_hrs_ro and ret_pct < 0 and hours_held < max_hrs_ro)
+        # Ratchet floor — recalcular para la vista (misma lógica que run_trading)
+        _rf = float(pos.get("ratchet_floor", 0))
+        if RATCHET_ENABLED and ret_pct > 0:
+            for _thr, _flr in sorted(RATCHET_LEVELS.items()):
+                if ret_pct >= _thr:
+                    _rf = max(_rf, _flr)
+        pos["ratchet_floor"] = round(_rf, 2)
 
     # open_value en EUR: usar current_price ya calculado (en divisa nativa) y convertir
     open_value = sum(

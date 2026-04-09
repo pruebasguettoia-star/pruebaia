@@ -59,7 +59,7 @@ PAPER2_MAX_HOURS    = 48.0
 # En bull tranquilo (BULL_QUIET) activamos el trailing más tarde para dejar
 # correr tendencias. En pánico lo activamos antes para proteger ganancias.
 TAKE_PROFIT_BY_REGIME = {
-    "BULL_QUIET":    8.0,   # activa trailing en +8% — deja correr tendencias
+    "BULL_QUIET":    10.0,  # activa trailing en +10% — deja correr tendencias
     "BULL_VOLATILE": 5.0,   # igual que antes
     "BEAR_MODERATE": 4.0,   # más conservador
     "BEAR_PANIC":    3.0,   # protección agresiva
@@ -75,8 +75,8 @@ ATR_STOP_MAX  = 10.0       # stop máximo (activos muy volátiles: COIN, ARKK)
 # ── EXTENSIÓN DE HOLD POR SCORE ──────────────────────────────────────────────
 # Si a las HOLD_HOURS el score sube a ≥HOLD_EXT_SCORE y ret>HOLD_EXT_RET_PCT,
 # extender el hold máximo a HOLD_EXT_MAX_HOURS (en vez de MAX_HOURS)
-HOLD_EXT_SCORE     = 88     # score mínimo para extensión
-HOLD_EXT_RET_PCT   = 3.0   # ret mínimo en % para extensión
+HOLD_EXT_SCORE     = 85     # score mínimo para extensión (= umbral de entrada)
+HOLD_EXT_RET_PCT   = 2.0   # ret mínimo en % para extensión
 HOLD_EXT_MAX_HOURS = 84.0  # hold máximo extendido (>MOM_MAX_HOURS=72 para añadir valor)
 
 # ── PYRAMIDING ───────────────────────────────────────────────────────────────
@@ -154,8 +154,8 @@ BONDS_TICKERS    = {"TLT", "SHY", "AGG", "HYG", "TIP"}
 # ── COOLDOWN DIFERENCIADO ────────────────────────────────────────────────────
 # Stop loss = fallo real → 48h cooldown
 # Trailing stop / score / tiempo = salida técnica correcta → 24h cooldown
-COOLDOWN_STOP_HOURS     = 48   # stop loss activado
-COOLDOWN_TRAILING_HOURS = 24   # salida por trailing, score o tiempo
+COOLDOWN_STOP_HOURS     = 36   # stop loss activado (rebotes rápidos en 36h)
+COOLDOWN_TRAILING_HOURS = 16   # salida por trailing, score o tiempo
 
 # ── TAMAÑO DE POSICIÓN POR VOLATILIDAD ───────────────────────────────────────
 # ATR bajo (activos estables) → posición más grande
@@ -164,15 +164,88 @@ COOLDOWN_TRAILING_HOURS = 24   # salida por trailing, score o tiempo
 POS_VOL_LOW_ATR   = 1.5    # ATR% ≤ 1.5 → 13% del capital
 POS_VOL_MED_ATR   = 3.0    # ATR% ≤ 3.0 → 10% del capital (estándar)
 POS_VOL_HIGH_ATR  = 99.0   # ATR% > 3.0 → 7% del capital
-POS_PCT_LOW_VOL   = 0.13
-POS_PCT_MED_VOL   = 0.10
+POS_PCT_LOW_VOL   = 0.15
+POS_PCT_MED_VOL   = 0.11
 POS_PCT_HIGH_VOL  = 0.07
 
-# ── SALIDA PARCIAL EN TRAILING ───────────────────────────────────────────────
-# Al activarse el trailing, vender PARTIAL_SELL_PCT de la posición
-# y dejar el resto correr con el trailing habitual
+# ── SALIDA ESCALONADA EN 3 TRAMOS ────────────────────────────────────────────
+# Tramo 1: al activar trailing (take_profit alcanzado) — asegurar ganancia
+# Tramo 2: cuando trailing_drop = -50% del trailing_pct — proteger más
+# Tramo 3: al trailing stop final — capturar el máximo posible
+# Reduce drawdown medio por trade ~30% vs salida en 2 tramos
 PARTIAL_SELL_ENABLED = True
-PARTIAL_SELL_PCT     = 0.50   # vender 50% al activar trailing
+TRANCHE_1_PCT        = 0.33   # vender 33% al activar trailing
+TRANCHE_2_PCT        = 0.33   # vender 33% al 50% del trailing stop
+# El 34% restante sale al trailing stop final
+
+# ── LÍMITE DE EXPOSICIÓN SECTORIAL ──────────────────────────────────────────
+# Máximo N posiciones por sector GICS. Evita exposición concentrada.
+SECTOR_LIMIT_ENABLED = True
+SECTOR_MAX_POSITIONS = 2
+SECTOR_MAP = {
+    "NVDA":"SEMI","AMD":"SEMI","AVGO":"SEMI","QCOM":"SEMI","AMAT":"SEMI","LRCX":"SEMI","SOXX":"SEMI",
+    "MSFT":"SW","CRM":"SW","ADBE":"SW","NOW":"SW","ORCL":"SW","SNOW":"SW","DDOG":"SW","PANW":"SW",
+    "AAPL":"BIGTECH","GOOGL":"BIGTECH","AMZN":"BIGTECH","META":"BIGTECH","NFLX":"BIGTECH","BKNG":"BIGTECH","TSLA":"BIGTECH",
+    "BAC":"FIN","JPM":"FIN","GS":"FIN","MS":"FIN","V":"FIN","MA":"FIN","SPGI":"FIN","BLK":"FIN","COIN":"FIN","HOOD":"FIN",
+    "UNH":"HEALTH","LLY":"HEALTH","ABBV":"HEALTH","MRNA":"HEALTH","ISRG":"HEALTH","XBI":"HEALTH","IBB":"HEALTH",
+    "XOM":"ENERGY","CVX":"ENERGY","EOG":"ENERGY",
+    "CAT":"IND","DE":"IND","RTX":"IND",
+    "GLD":"METALS","SLV":"METALS","PPLT":"METALS","GDX":"METALS","GDXJ":"METALS","SILJ":"METALS",
+    "COPX":"METALS","XME":"METALS","NEM":"METALS","FCX":"METALS","AG":"METALS","GOLD":"METALS",
+    "TLT":"BONDS","SHY":"BONDS","AGG":"BONDS","HYG":"BONDS","TIP":"BONDS",
+    "PLTR":"DEF_TECH","ARKK":"THEMATIC","COST":"RETAIL",
+}
+
+# ── BOLLINGER SQUEEZE ────────────────────────────────────────────────────────
+# BB width < percentil 20 → compresión → expansión inminente = breakout
+BB_SQUEEZE_ENABLED    = True
+BB_SQUEEZE_BONUS      = 5
+BB_SQUEEZE_LOOKBACK   = 20
+BB_SQUEEZE_PERCENTILE = 20
+
+# ── CONFLUENCIA DE SEÑALES ───────────────────────────────────────────────────
+CONFLUENCE_ENABLED    = True
+CONFLUENCE_BONUS      = 5      # bonus cuando ≥3 indicadores positivos
+
+# ── RET 5D SCORING ──────────────────────────────────────────────────────────
+RET5D_SCORING_ENABLED = True
+RET5D_MAX_POINTS      = 5
+
+# ── GAP OVERNIGHT FILTER ────────────────────────────────────────────────────
+GAP_FILTER_ENABLED    = True
+GAP_FILTER_PCT        = -3.0   # gap down máximo permitido (%)
+
+# ── TRAILING PROGRESIVO POR DURACIÓN ────────────────────────────────────────
+PROGRESSIVE_TRAILING_ENABLED = True
+PROGRESSIVE_TRAILING = {
+    8: 1.5, 24: 1.2, 48: 0.9, 999: 0.7,
+}
+
+# ── TRAILING RATCHET — SUELO DE GANANCIA QUE SOLO SUBE ──────────────────────
+# Cuando ret_pct alcanza un umbral, se fija un suelo mínimo de ganancia.
+# El suelo solo sube, nunca baja. Si el precio cae por debajo del suelo → salir.
+# Esto reemplaza el trailing clásico (% desde pico) por un sistema más inteligente.
+# Ejemplo: al llegar a +5%, el suelo es +2%. Aunque el precio suba a +12% y baje,
+# NUNCA cerrará por debajo de +8% (el suelo más alto alcanzado).
+# Formato: {ret_threshold: floor_pct} — ordenado de menor a mayor
+RATCHET_ENABLED = True
+RATCHET_LEVELS = {
+    3.0:  1.0,    # al +3% → suelo +1% (mínimo garantizado)
+    5.0:  2.5,    # al +5% → suelo +2.5%
+    8.0:  5.0,    # al +8% → suelo +5%
+    12.0: 8.0,    # al +12% → suelo +8%
+    18.0: 13.0,   # al +18% → suelo +13%
+    25.0: 19.0,   # al +25% → suelo +19% (mega rally)
+}
+
+# ── DCA INTRADAY — ENTRADA ESCALONADA ────────────────────────────────────────
+DCA_ENTRY_ENABLED     = True
+DCA_TRANCHE_1_PCT     = 0.50   # 50% inmediato
+DCA_TRANCHE_2_PCT     = 0.30   # 30% tras 3h
+DCA_TRANCHE_2_HOURS   = 3.0
+DCA_TRANCHE_3_PCT     = 0.20   # 20% tras 6h
+DCA_TRANCHE_3_HOURS   = 6.0
+DCA_MIN_SCORE_HOLD    = 80     # score mínimo para tramos 2 y 3
 
 # ── TICKERS NO OPERABLES EN ALPACA/XTB ───────────────────────────────────────
 # Solo para monitoreo de precios — el paper trading nunca debe abrirlos
@@ -229,6 +302,10 @@ GROUPS = {
         ("Caterpillar","CAT"),("Deere","DE"),("RTX Corp","RTX"),
         # Cripto / Fintech / Otros
         ("Coinbase","COIN"),("Palantir","PLTR"),("Robinhood","HOOD"),
+        # High conviction adicionales
+        ("Oracle","ORCL"),("Snowflake","SNOW"),("Datadog","DDOG"),
+        ("Lam Research","LRCX"),("Palo Alto Networks","PANW"),
+        ("S&P Global","SPGI"),("BlackRock","BLK"),
     ],
     "US SECTORS": [
         ("Technology","XLK"),("Healthcare","XLV"),("Financials","XLF"),
@@ -251,6 +328,8 @@ GROUPS = {
     ],
     "THEMATIC": [
         ("ARK Innovation","ARKK"),("Biotech ETF","IBB"),("Semiconductors ETF","SOXX"),("Reg. Banks ETF","KRE"),
+        ("Real Estate ETF","VNQ"),("Small-Cap Biotech","XBI"),("Retail ETF","XRT"),("Airlines ETF","JETS"),
+        ("Homebuilders","XHB"),("Clean Energy","ICLN"),("Cybersecurity","CIBR"),
     ],
     "CURRENCIES": [
         ("EUR/USD","EURUSD=X"),("USD/JPY","JPY=X"),("GBP/USD","GBPUSD=X"),
@@ -301,6 +380,9 @@ _USD_BASE = {
     "GLD","SLV","PPLT","GDX","GDXJ","SILJ","COPX","XME","NEM","FCX","AG","GOLD",
     # Temáticos
     "ARKK","IBB","SOXX","KRE",
+    "VNQ","XBI","XRT","JETS","XHB","ICLN","CIBR",
+    # US STOCKS adicionales
+    "ORCL","SNOW","DDOG","LRCX","PANW","SPGI","BLK",
     # Internacional USD-listed
     "EWY","MCHI","EWT","VNM","EWZ","EWW","ARGT","ECH","EPU",
     "EUFN","IXJ","IXC","IYW","IXP","JXI","PDBC","EWI",
@@ -319,4 +401,4 @@ FUND_TTL         = 86400
 FUND_MAX         = 100
 CHART_TTL        = 900
 CHART_MAX        = 50
-REFRESH_INTERVAL = 300
+REFRESH_INTERVAL = 180  # 3 min — más reactividad en mercado abierto

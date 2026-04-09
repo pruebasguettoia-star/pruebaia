@@ -19,6 +19,10 @@ from config import (
     GROUPS, USD_TICKERS, INTRADAY_TTL, FUND_TTL, FUND_MAX,
     CHART_TTL, CHART_MAX,
     ATR_TRAILING_MULT, ATR_TRAILING_FLOOR, ATR_TRAILING_CAP, ATR_DEFAULT_PCT,
+    BB_SQUEEZE_ENABLED, BB_SQUEEZE_BONUS, BB_SQUEEZE_LOOKBACK, BB_SQUEEZE_PERCENTILE,
+    CONFLUENCE_ENABLED, CONFLUENCE_BONUS,
+    RET5D_SCORING_ENABLED, RET5D_MAX_POINTS,
+    GAP_FILTER_ENABLED,
 )
 
 # ── EUR/USD ───────────────────────────────────────────────────────────────────
@@ -524,6 +528,7 @@ def fetch_ticker(name, ticker):
             return None
 
         prev_close = float(close.iloc[-2]) if len(close) >= 2 else None
+        five_d_ago = closest(5)
         week_ago   = closest(7)
         month_ago  = closest(30)
         ytd_start  = hist[hist.index <= datetime(now.year, 1, 1)]
@@ -575,6 +580,23 @@ def fetch_ticker(name, ticker):
             bb_pct = round((price - bb_lo) / (bb_up - bb_lo) * 100, 1)
         else:
             bb_pct = None
+
+        # BB Squeeze detection — compresión de volatilidad → breakout inminente
+        bb_squeeze = False
+        if BB_SQUEEZE_ENABLED and len(close) >= BB_SQUEEZE_LOOKBACK + 5:
+            _sma20_s = close.rolling(20).mean()
+            _std20_s = close.rolling(20).std()
+            _bb_width = ((_sma20_s + 2 * _std20_s) - (_sma20_s - 2 * _std20_s)) / _sma20_s
+            _bb_width = _bb_width.dropna()
+            if len(_bb_width) >= BB_SQUEEZE_LOOKBACK:
+                _recent_width = float(_bb_width.iloc[-1])
+                _lookback = _bb_width.iloc[-BB_SQUEEZE_LOOKBACK:]
+                import numpy as np
+                _pctile = float(np.percentile(_lookback.dropna(), BB_SQUEEZE_PERCENTILE))
+                # Squeeze: width was below percentile recently and now expanding
+                _prev_width = float(_bb_width.iloc[-3]) if len(_bb_width) >= 3 else _recent_width
+                if _prev_width <= _pctile and _recent_width > _prev_width:
+                    bb_squeeze = True
 
         # Intraday
         r15, r60, r180, up_vol, dn_vol, last_price = fetch_intraday(ticker)
@@ -776,6 +798,82 @@ def fetch_ticker(name, ticker):
         else:
             sc_rel_note = "Sin datos relativos vs SPY (0)"
 
+        # ── BB Squeeze Detection (+5 pts) ────────────────────────────────
+        # Compresión de Bollinger Bands + expansión = breakout inminente
+        sc_squeeze = 0
+        sc_squeeze_note = ""
+        bb_squeeze_detected = False
+        if BB_SQUEEZE_ENABLED and len(close) >= BB_SQUEEZE_LOOKBACK + 5:
+            try:
+                _sma20_s = close.rolling(20).mean()
+                _std20_s = close.rolling(20).std()
+                _bb_width = (_std20_s * 2) / _sma20_s.replace(0, float("nan"))
+                _bw_recent = _bb_width.dropna()
+                if len(_bw_recent) >= BB_SQUEEZE_LOOKBACK:
+                    _bw_window = _bw_recent.iloc[-BB_SQUEEZE_LOOKBACK:]
+                    _pctile = float(_bw_window.quantile(BB_SQUEEZE_PERCENTILE / 100))
+                    _bw_now = float(_bw_recent.iloc[-1])
+                    _bw_prev = float(_bw_recent.iloc[-3]) if len(_bw_recent) >= 3 else _bw_now
+                    # Squeeze = BB width estuvo comprimido y ahora está expandiendo
+                    if _bw_prev <= _pctile and _bw_now > _bw_prev:
+                        bb_squeeze_detected = True
+                        if rsi is not None and rsi < 40:
+                            sc_squeeze = BB_SQUEEZE_BONUS
+                            sc_squeeze_note = f"BB Squeeze + RSI {rsi:.0f} — breakout probable (+{BB_SQUEEZE_BONUS})"
+                        else:
+                            sc_squeeze_note = "BB Squeeze detectado pero RSI > 40 (0)"
+                    else:
+                        sc_squeeze_note = "Sin BB Squeeze (0)"
+            except Exception:
+                sc_squeeze_note = "BB Squeeze: error de cálculo (0)"
+        else:
+            sc_squeeze_note = "BB Squeeze deshabilitado o datos insuficientes (0)"
+
+        # ── Ret 5D scoring (+5 pts max) ──────────────────────────────────
+        # Caídas recientes (5 días) indican capitulación fresca
+        sc_ret5d = 0
+        sc_ret5d_note = ""
+        ret_5d_val = None
+        if RET5D_SCORING_ENABLED and len(close) > 5:
+            p5d = float(close.iloc[-6])
+            if p5d > 0:
+                ret_5d_val = (price - p5d) / p5d * 100
+                if   ret_5d_val <= -10: sc_ret5d = RET5D_MAX_POINTS; sc_ret5d_note = f"Caída 5D {ret_5d_val:.1f}% — capitulación (+{RET5D_MAX_POINTS})"
+                elif ret_5d_val <=  -5: sc_ret5d = 3; sc_ret5d_note = f"Caída 5D {ret_5d_val:.1f}% — presión vendedora (+3)"
+                elif ret_5d_val <=  -2: sc_ret5d = 1; sc_ret5d_note = f"Caída 5D {ret_5d_val:.1f}% — leve (+1)"
+                else: sc_ret5d_note = f"Ret 5D {ret_5d_val:.1f}% — sin señal (0)"
+        else:
+            sc_ret5d_note = "Ret 5D sin datos (0)"
+
+        # ── Confluence bonus (+5 pts) ────────────────────────────────────
+        # 3+ señales positivas simultáneas = alta convicción
+        sc_confluence = 0
+        sc_confluence_note = ""
+        if CONFLUENCE_ENABLED:
+            _positive_signals = 0
+            if rsi is not None and rsi <= 30: _positive_signals += 1
+            if bb_pct is not None and bb_pct <= 15: _positive_signals += 1
+            if vol_rel is not None and vol_rel >= 1.5: _positive_signals += 1
+            if trend == "bullish": _positive_signals += 1
+            if rsi_divergence == "bullish": _positive_signals += 1
+            if ret_5d_val is not None and ret_5d_val <= -5: _positive_signals += 1
+            if _positive_signals >= 3:
+                sc_confluence = CONFLUENCE_BONUS
+                sc_confluence_note = f"Confluencia {_positive_signals} señales — alta convicción (+{CONFLUENCE_BONUS})"
+            else:
+                sc_confluence_note = f"Confluencia: {_positive_signals} señales < 3 (0)"
+
+        # ── Gap overnight detection (para paper_engine) ──────────────────
+        gap_down_pct = None
+        if GAP_FILTER_ENABLED and len(hist) >= 2 and "Open" in hist.columns:
+            try:
+                _today_open = float(hist["Open"].iloc[-1])
+                _yest_close = float(close.iloc[-2])
+                if _yest_close > 0:
+                    gap_down_pct = round((_today_open - _yest_close) / _yest_close * 100, 2)
+            except Exception:
+                pass
+
         # ── Pesos adaptativos por regimen de mercado ──────────────────────────
         # El umbral de entrada (85) no cambia — cambian los pesos de cada componente.
         # En BULL_QUIET: BB% y fuerza relativa valen mas (RSI<=30 es raro en bull tranquilo).
@@ -827,7 +925,9 @@ def fetch_ticker(name, ticker):
         # Total — re-aplicar cap de calidad tras multiplicadores adaptativos
         # (los multiplicadores pueden llevar sc_quality más allá de -15)
         sc_quality = max(-15, sc_quality)
-        inv_score_raw = sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy + sc_div_bonus + sc_quality + sc_rel
+        inv_score_raw = (sc_rsi + sc_bb + sc_trend + sc_vol + sc_ret1m + sc_pe + sc_dy
+                         + sc_div_bonus + sc_quality + sc_rel
+                         + sc_squeeze + sc_ret5d + sc_confluence)
         inv_score = max(1, min(100, inv_score_raw))
 
         inv_score_breakdown = {
@@ -835,7 +935,10 @@ def fetch_ticker(name, ticker):
             "trend":   sc_trend_note, "vol": sc_vol_note, "ret1m": sc_ret1m_note,
             "quality": sc_quality_note, "rel": sc_rel_note,
             "pe": sc_pe_note, "dy": sc_dy_note,
-            "div":     sc_div_note, "total": inv_score,
+            "div":     sc_div_note,
+            "squeeze": sc_squeeze_note, "ret5d": sc_ret5d_note,
+            "confluence": sc_confluence_note,
+            "total": inv_score,
             "regime":  _regime_label,
             # Nota del régimen para el frontend — explica por qué cambió el score
             "regime_note": {
@@ -881,6 +984,9 @@ def fetch_ticker(name, ticker):
             "ret_1y": pct(price, year_ago), "ret_3y": pct(price, three_yr),
             "beta": beta, "prob_up_30d": prob_up_30d,
             "rel_strength": rel_strength,
+            "bb_squeeze": bb_squeeze_detected,
+            "gap_down_pct": gap_down_pct,
+            "ret_5d": ret_5d_val,
             "market_open": market_open,
             "currency": "EUR" if fx != 1.0 else "local",
         }
@@ -904,7 +1010,7 @@ def breakdown_to_str(bd):
     }
     sep = "─────────────────────"
     lines = [label, f"Régimen: {regime_icons.get(regime, regime)}", sep]
-    for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "rel", "pe", "dy", "div"):
+    for k in ("rsi", "bb", "trend", "vol", "ret1m", "quality", "rel", "pe", "dy", "div", "squeeze", "ret5d", "confluence"):
         v = bd.get(k, "")
         if v:
             lines.append(v)

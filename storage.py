@@ -184,6 +184,12 @@ def init_db():
         ("closed_pos", "entry_score",      "INTEGER"),
         # state
         ("state",      "alerted_json",     "TEXT NOT NULL DEFAULT '[]'"),
+        # v14: salida 3 tramos + DCA entry
+        ("open_pos",   "tranche_2_done",   "INTEGER DEFAULT 0"),
+        ("open_pos",   "dca_pending_eur",  "TEXT"),
+        ("open_pos",   "dca_tranche",      "INTEGER DEFAULT 3"),
+        # v14: trailing ratchet — suelo de ganancia persistido
+        ("open_pos",   "ratchet_floor",    "REAL DEFAULT 0"),
     ]
     for table, col, col_def in _migrations:
         try:
@@ -260,8 +266,8 @@ def atomic_open_position(pos, cost_eur):
         INSERT INTO open_pos (ticker, name, entry_date, entry_price, current_price,
             peak_price, currency, shares, ret_pct, trailing_drop, trailing_active,
             trailing_pct, hours_held, hours_left, entry_score, score, waiting_recovery,
-            trade_mode, pyramid_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trade_mode, pyramid_count, tranche_2_done, dca_pending_eur, dca_tranche)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         pos["ticker"], pos.get("name"), pos["entry_date"], pos["entry_price"],
         pos.get("current_price", pos["entry_price"]), pos.get("peak_price", pos["entry_price"]),
@@ -272,6 +278,9 @@ def atomic_open_position(pos, cost_eur):
         int(pos.get("waiting_recovery", False)),
         pos.get("trade_mode", "dip_buying"),
         int(pos.get("pyramid_count", 0)),
+        int(pos.get("tranche_2_done", False)),
+        pos.get("dca_pending_eur"),
+        int(pos.get("dca_tranche", 3)),
     ))
     conn.commit()
 
@@ -282,13 +291,16 @@ def partial_close(ticker, shares_sold, cost_recovered_eur):
         log.warning("partial_close: shares_sold=%.6f inválido para %s", shares_sold, ticker)
         return
     conn = _conn()
-    row = conn.execute("SELECT shares FROM open_pos WHERE ticker=?", (ticker,)).fetchone()
+    row = conn.execute("SELECT shares, entry_price, currency FROM open_pos WHERE ticker=?", (ticker,)).fetchone()
     if row is None:
         log.warning("partial_close: posición %s no encontrada", ticker)
         return
     if float(row["shares"]) < shares_sold - 1e-9:
-        shares_sold = float(row["shares"])
-        cost_recovered_eur = shares_sold
+        # Ajustar shares al máximo disponible y recalcular el valor EUR proporcionalmente
+        actual_shares = float(row["shares"])
+        ratio = actual_shares / shares_sold if shares_sold > 0 else 0
+        cost_recovered_eur = cost_recovered_eur * ratio
+        shares_sold = actual_shares
         log.warning("partial_close: ajustando shares_sold a %.6f para %s", shares_sold, ticker)
     conn.execute("UPDATE state SET capital = capital + ? WHERE id=1", (round(cost_recovered_eur, 6),))
     conn.execute(

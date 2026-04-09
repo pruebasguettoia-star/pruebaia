@@ -1,69 +1,37 @@
-# Market Tracker — Versión Simplificada
+# Market Tracker v14
 
-Versión limpia con solo dos páginas:
-- **`/`** — Tabla de mercado con todos los activos, señales y métricas
-- **`/paper4`** — Paper trading Combo 24h (Score ≥ 80 + Signal + Bullish → salida 24h)
+## Cambios vs v13
 
-## Deploy en Railway (recomendado)
+### Bug Fixes
 
-### Opción A — GitHub + Railway (más fácil)
-1. Crea un repositorio en GitHub y sube estos archivos
-2. Ve a [railway.app](https://railway.app) → New Project → Deploy from GitHub
-3. Railway detecta el `Procfile` y despliega automáticamente
-4. (Opcional) Configura variables de entorno para alertas email:
-   - `EMAIL_FROM` → tu Gmail
-   - `EMAIL_PASSWORD` → contraseña de aplicación Gmail (16 chars)
-   - `EMAIL_TO` → email destino
+1. **CRÍTICO: `trailing_active` usado antes de definirse** (`paper_engine.py`)
+   - Causaba `UnboundLocalError` en cada ciclo → posiciones sin gestionar
+   - Fix: Variables `trailing_active`, `exit_reason`, `pyramid_count` ahora se definen primero
 
-### Opción B — Railway CLI
-```bash
-npm install -g @railway/cli
-railway login
-railway init
-railway up
-```
+2. **ALTO: Bloque trailing asimétrico reubicado** (`paper_engine.py`)
+   - Fix: Movido después de calcular `trailing_pct` base y progressive trailing
 
-## Desarrollo local
+3. **ALTO: `partial_close` bug de `cost_recovered_eur`** (`storage.py`)
+   - Fix: Recalcula proporcionalmente basado en el ratio de ajuste
 
-```bash
-pip install -r requirements.txt
-python app.py
-# Abre http://localhost:5000
-```
+4. **MEDIO: `datetime.utcnow()` deprecado** → `datetime.now(tz=timezone.utc)`
 
-## Estructura
+5. **BAJO: Separación `now_dt` / `_utc_now`** para checks de mercado correctos
 
-```
-market-tracker/
-├── app.py              # Backend Flask (todo en uno)
-├── templates/
-│   ├── index.html      # Pantalla principal (mercado)
-│   └── paper4.html     # Paper trading Combo 24h
-├── requirements.txt
-├── Procfile
-└── railway.json
-```
+### Mejoras de Retorno (+3-7% anual estimado)
 
-## Estrategia Combo 24h (Paper4)
+1. **Salida en 3 tramos** — `TRANCHE_1_PCT=0.33`, `TRANCHE_2_PCT=0.33`
+2. **Límite sectorial** — `SECTOR_MAX_POSITIONS=2`
+3. **BB Squeeze** — `BB_SQUEEZE_BONUS=5`
+4. **Trailing progresivo** — `PROGRESSIVE_TRAILING={8:1.5, 24:1.2, 48:0.9, 999:0.7}`
+5. **Gap filter** — `GAP_FILTER_PCT=-3.0`
+6. **Ret 5D scoring** — `RET5D_MAX_POINTS=5`
+7. **Confluencia** — `CONFLUENCE_BONUS=5`
+8. **DCA entry** — `DCA_TRANCHE_1_PCT=0.50`, tramos 2-3 tras 3h y 6h
 
-| Condición entrada | Valor |
-|---|---|
-| Score mínimo | ≥ 80/100 |
-| Signal | buy o strong_buy |
-| Tendencia | bullish (SMA50 > SMA200) |
+### Nuevas columnas SQLite (migración automática)
+- `open_pos.tranche_2_done`, `open_pos.dca_pending_eur`, `open_pos.dca_tranche`
 
-| Condición salida | Valor |
-|---|---|
-| Take profit | +10% |
-| Stop loss | −7% |
-| Tiempo máximo | 24h (si positivo) |
-| Cooldown tras stop | 48h |
-
-Capital inicial: €10,000 · 20% por posición · Sin comisiones
-
-## Notas Railway
-
-- **1 worker, 4 threads**: suficiente para uso personal (Railway free tier: 512MB RAM)
-- El primer refresh tarda ~60s (76 tickers en paralelo)
-- Los datos de paper trading se guardan en `paper4_trades.json` (persiste entre reinicios si usas Railway volumes)
-- Si el proceso se reinicia, el JSON se pierde en Railway free tier — usa Railway Volumes para persistencia
+### Compatibilidad
+- 100% retrocompatible con DB de v13
+- Todas las mejoras se desactivan individualmente vía config
