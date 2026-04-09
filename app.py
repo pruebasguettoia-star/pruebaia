@@ -205,6 +205,13 @@ def background_refresh():
     except Exception as e:
         log.critical("paper_engine.init() falló: %s — el hilo de fondo continúa sin trading", e)
 
+    # Corrección puntual de capital (se ejecuta solo una vez)
+    try:
+        import fix_capital
+        fix_capital.run()
+    except Exception as e:
+        log.warning("fix_capital error: %s", e)
+
     # Cargar alerted persistido para no re-alertar tras reinicio
     global alerted
     try:
