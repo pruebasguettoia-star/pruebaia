@@ -395,6 +395,121 @@ ALPACA_TRADEABLE = _USD_BASE
 EU_TICKERS = {"ISF.L", "^FCHI", "^GDAXI", "^AEX", "^IBEX", "^SSMI"}
 FUTURES_TICKERS = {"BZ=F","CL=F","NG=F","ZW=F","EURUSD=X","JPY=X","GBPUSD=X","CHF=X","CNY=X"}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ── V15 MEJORAS DE RETORNO ─────────────────────────────────────────────────
+# Activación por fases. Ver V15_CHANGELOG.md para el checklist completo.
+#
+# ESTADO ACTUAL: Paso 3 del checklist — Fase 1 activa (Pasos 1, 2 y 3)
+#   • #1  IGNORE_SCORE_ON_TRAILING  → ON
+#   • #15 EARNINGS_BLACKOUT         → ON
+#   • #14 META_SIZING_ENABLED       → ON
+# Resto de mejoras v15 desactivadas — activar gradualmente siguiendo el
+# checklist de V15_CHANGELOG.md
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── #1 IGNORAR SCORE EN TRAILING ACTIVO ──────────────────────────────────────
+# El score baja naturalmente cuando un ticker rebota (RSI sube, BB% sube).
+# Cerrar por score bajo cuando ya estás en trailing = echar fuera ganadores
+# por su propio éxito. El trailing + ratchet ya protegen la salida.
+IGNORE_SCORE_ON_TRAILING = True   # ✅ FASE 1 — Paso 1
+
+# ── #2 POSITION SIZING POR SCORE BUCKET ─────────────────────────────────────
+# Multiplicador del pos_pct según la calidad de la señal.
+# Score 95+ tiene expectancy históricamente mayor — merece más capital.
+SCORE_SIZING_ENABLED = False   # ⏸ FASE 2 — Paso 5
+SCORE_SIZING_BUCKETS = {
+    (85, 89): 1.00,
+    (90, 94): 1.15,
+    (95, 100): 1.30,
+}
+SCORE_SIZING_MAX_PCT = 0.18
+
+# ── #3 PARCHE BULL_QUIET ─────────────────────────────────────────────────────
+# En bull tranquilo raramente se ve RSI<=30 → pocas entradas → sistema inactivo.
+# Bajar umbral a 82 Y exigir rel_strength >=+3% = entrar solo en líderes
+# en pullback, sin ampliar en regímenes peligrosos.
+BULL_QUIET_PATCH_ENABLED = False   # ⏸ FASE 2 — Paso 6
+BULL_QUIET_MIN_SCORE     = 82
+BULL_QUIET_MIN_REL       = 3.0
+
+# ── #4 EARLY EXIT MÁS RESTRICTIVO ───────────────────────────────────────────
+# El early exit original cierra con score<80 pero el score baja por éxito del
+# trade. Exigir también deterioro de rel_strength evita falsos positivos.
+# Nota: este parámetro SOLO se aplica si EARLY_EXIT_ENABLED sigue activo.
+# Se controla automáticamente por la presencia de rel_strength en la data.
+EARLY_EXIT_REL_DETERIORATION = 2.0
+
+# ── #5 COOLDOWNS ASIMÉTRICOS POR P&L ────────────────────────────────────────
+# Castigar solo trades malos — los buenos deben poder reentrar rápido.
+ASYMMETRIC_COOLDOWN_ENABLED = False   # ⏸ FASE 2 — Paso 4
+COOLDOWN_BIG_LOSS_HOURS   = 48
+COOLDOWN_SMALL_LOSS_HOURS = 24
+COOLDOWN_SMALL_WIN_HOURS  = 8
+COOLDOWN_BIG_WIN_HOURS    = 4
+COOLDOWN_BIG_WIN_THR      = 3.0
+COOLDOWN_BIG_LOSS_THR     = -3.0
+
+# ── #6 GRUPOS DE CORRELACIÓN ────────────────────────────────────────────────
+# Sector limit no basta: MSFT+GOOGL+META+AMZN son todos "mega-cap tech" y
+# se mueven juntos. Aplicar un cap global sobre correlated groups.
+CORRELATION_LIMIT_ENABLED = False   # ⏸ FASE 3 — Paso 7
+CORRELATION_GROUPS = {
+    "MEGA_TECH": {"SEMI", "SW", "BIGTECH"},
+    "PRECIOUS": {"METALS"},
+    "RATES": {"BONDS"},
+}
+CORRELATION_MAX_POSITIONS = 4
+
+# ── #7 MOMENTUM TAKE PROFIT MÁS ALTO ────────────────────────────────────────
+# Con el ratchet existente ya hay piso desde +3%. No necesitas trailing desde
+# +2% encima — deja correr más la tendencia antes de activar trailing.
+# Nota: si quieres desactivarlo, pon MOM_TAKE_PROFIT_V15 = MOM_TAKE_PROFIT (=2.0)
+MOM_TAKE_PROFIT_V15 = 2.0   # ⏸ FASE 3 — Paso 9 — cambiar a 4.0 cuando toque
+
+# ── #11 STOP COMBINADO ATR + ADR ────────────────────────────────────────────
+# Average Daily Range (high-low) es más estable que ATR para stops.
+ADR_STOP_ENABLED    = False   # ⏸ FASE 4 — Paso 10
+ADR_STOP_MULT       = 1.5
+ADR_LOOKBACK_DAYS   = 20
+
+# ── #12 FALSE BREAKOUT DETECTION ────────────────────────────────────────────
+FALSE_BREAKOUT_ENABLED       = False   # ⏸ FASE 4 — Paso 11
+FALSE_BREAKOUT_MAX_HOURS     = 4.0
+FALSE_BREAKOUT_TOUCH_PCT     = 1.0
+FALSE_BREAKOUT_RETURN_PCT    = -0.5
+FALSE_BREAKOUT_MIN_VOL_REL   = 1.3
+
+# ── #13 RISK PARITY POR TRADE ───────────────────────────────────────────────
+# Cambio fundamental de sizing. Solo activar tras validación.
+RISK_PARITY_ENABLED = False   # ⚠️ NO ACTIVAR SIN BACKTEST
+RISK_PER_TRADE_EUR  = 150.0
+
+# ── #14 META-SIZING POR DRAWDOWN ────────────────────────────────────────────
+# En drawdown >5% reducir tamaño. En ATH, tamaño normal. Anti-martingale.
+META_SIZING_ENABLED     = True   # ✅ FASE 1 — Paso 3
+META_SIZING_DD_THRESHOLD = -5.0
+META_SIZING_REDUCTION   = 0.70
+
+# ── #15 EARNINGS BLACKOUT ───────────────────────────────────────────────────
+# No abrir posición con earnings en las próximas 48h.
+EARNINGS_BLACKOUT_ENABLED = True   # ✅ FASE 1 — Paso 2
+EARNINGS_BLACKOUT_HOURS   = 48
+
+# ── #17 LIQUIDITY SHOCK EXIT ────────────────────────────────────────────────
+LIQUIDITY_SHOCK_ENABLED = False   # ⏸ FASE 4 — Paso 12
+LIQUIDITY_SHOCK_VOL_REL = 0.3
+LIQUIDITY_SHOCK_HOURS   = 2.0
+
+# ── #23 CIRCUIT BREAKER POR DRAWDOWN PROPIO ─────────────────────────────────
+DD_CIRCUIT_BREAKER_ENABLED = False   # ⏸ FASE 4 — Paso 13
+DD_CIRCUIT_DAILY_THRESHOLD = -3.0
+DD_CIRCUIT_WEEKLY_THRESHOLD = -8.0
+DD_CIRCUIT_COOLDOWN_HOURS  = 36
+
+# ── #10 INTRADAY VIX SPIKE OVERRIDE ─────────────────────────────────────────
+INTRADAY_VIX_OVERRIDE_ENABLED = False   # ⏸ FASE 4 — Paso 14
+INTRADAY_VIX_SPIKE_PCT        = 20.0
+
 # ── CACHE TTLs ────────────────────────────────────────────────────────────────
 INTRADAY_TTL     = 240
 FUND_TTL         = 86400

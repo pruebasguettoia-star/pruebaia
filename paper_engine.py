@@ -38,8 +38,34 @@ from config import (
     DCA_ENTRY_ENABLED, DCA_TRANCHE_1_PCT, DCA_TRANCHE_2_PCT,
     DCA_TRANCHE_2_HOURS, DCA_TRANCHE_3_PCT, DCA_TRANCHE_3_HOURS,
     DCA_MIN_SCORE_HOLD,
+    # ── V15 ────────────────────────────────────────────────────────────
+    IGNORE_SCORE_ON_TRAILING,
+    SCORE_SIZING_ENABLED, SCORE_SIZING_BUCKETS, SCORE_SIZING_MAX_PCT,
+    BULL_QUIET_PATCH_ENABLED, BULL_QUIET_MIN_SCORE, BULL_QUIET_MIN_REL,
+    EARLY_EXIT_REL_DETERIORATION,
+    ASYMMETRIC_COOLDOWN_ENABLED,
+    COOLDOWN_BIG_LOSS_HOURS, COOLDOWN_SMALL_LOSS_HOURS,
+    COOLDOWN_SMALL_WIN_HOURS, COOLDOWN_BIG_WIN_HOURS,
+    COOLDOWN_BIG_WIN_THR, COOLDOWN_BIG_LOSS_THR,
+    CORRELATION_LIMIT_ENABLED, CORRELATION_GROUPS, CORRELATION_MAX_POSITIONS,
+    MOM_TAKE_PROFIT_V15,
+    ADR_STOP_ENABLED, ADR_STOP_MULT, ADR_LOOKBACK_DAYS,
+    FALSE_BREAKOUT_ENABLED, FALSE_BREAKOUT_MAX_HOURS,
+    FALSE_BREAKOUT_TOUCH_PCT, FALSE_BREAKOUT_RETURN_PCT,
+    FALSE_BREAKOUT_MIN_VOL_REL,
+    RISK_PARITY_ENABLED, RISK_PER_TRADE_EUR,
+    META_SIZING_ENABLED, META_SIZING_DD_THRESHOLD, META_SIZING_REDUCTION,
+    EARNINGS_BLACKOUT_ENABLED, EARNINGS_BLACKOUT_HOURS,
+    LIQUIDITY_SHOCK_ENABLED, LIQUIDITY_SHOCK_VOL_REL, LIQUIDITY_SHOCK_HOURS,
+    DD_CIRCUIT_BREAKER_ENABLED, DD_CIRCUIT_DAILY_THRESHOLD,
+    DD_CIRCUIT_WEEKLY_THRESHOLD, DD_CIRCUIT_COOLDOWN_HOURS,
+    INTRADAY_VIX_OVERRIDE_ENABLED, INTRADAY_VIX_SPIKE_PCT,
 )
-from indicators import get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime, get_vix_sma5, is_momentum_candidate, calc_atr_pct
+from indicators import (
+    get_eurusd, get_trailing_pct, get_spy_regime, get_market_regime,
+    get_vix_sma5, is_momentum_candidate, calc_atr_pct,
+    calc_adr_pct, has_earnings_soon, is_vix_intraday_spiking,
+)
 import alpaca_api
 import storage
 
@@ -91,8 +117,201 @@ def init():
     if not open_pos and not closed:
         storage.migrate_from_json(PAPER2_FILE)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V15: Helpers de drawdown — mejoras #14 y #23
+# ─────────────────────────────────────────────────────────────────────────────
+def _compute_current_drawdown():
+    """Drawdown % desde el pico histórico del equity_log. 0.0 si estamos en ATH."""
+    try:
+        log_rows = storage.get_equity_log(5000)
+        if not log_rows:
+            return 0.0
+        equities = [r.get("equity", 0) for r in log_rows if r.get("equity")]
+        if not equities:
+            return 0.0
+        peak = max(equities)
+        current = equities[-1]
+        if peak <= 0:
+            return 0.0
+        dd = (current - peak) / peak * 100
+        return dd
+    except Exception:
+        return 0.0
+
+
+def _compute_dd_window(hours):
+    """DD en las últimas N horas (para circuit breaker daily/weekly)."""
+    try:
+        log_rows = storage.get_equity_log(5000)
+        if not log_rows:
+            return 0.0
+        cutoff = datetime.now() - timedelta(hours=hours)
+        recent = []
+        for r in log_rows:
+            ts_str = r.get("ts") or r.get("timestamp")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.strptime(ts_str[:16], "%Y-%m-%d %H:%M")
+                if ts >= cutoff:
+                    recent.append(r.get("equity", 0))
+            except Exception:
+                continue
+        if len(recent) < 2:
+            return 0.0
+        peak = max(recent)
+        current = recent[-1]
+        if peak <= 0:
+            return 0.0
+        return (current - peak) / peak * 100
+    except Exception:
+        return 0.0
+
+
+def _score_size_multiplier(score):
+    """Multiplicador del pos_pct por bucket de score (#2)."""
+    if not SCORE_SIZING_ENABLED or not isinstance(score, (int, float)):
+        return 1.0
+    for (lo, hi), mult in SCORE_SIZING_BUCKETS.items():
+        if lo <= score <= hi:
+            return mult
+    return 1.0
+
+
+def _cooldown_hours_for(ret_pct, is_stop_loss_exit):
+    """Cooldown asimétrico por resultado (#5)."""
+    if not ASYMMETRIC_COOLDOWN_ENABLED:
+        return COOLDOWN_STOP_HOURS if is_stop_loss_exit else COOLDOWN_TRAILING_HOURS
+    if ret_pct <= COOLDOWN_BIG_LOSS_THR:
+        return COOLDOWN_BIG_LOSS_HOURS
+    if ret_pct < 0:
+        return COOLDOWN_SMALL_LOSS_HOURS
+    if ret_pct >= COOLDOWN_BIG_WIN_THR:
+        return COOLDOWN_BIG_WIN_HOURS
+    return COOLDOWN_SMALL_WIN_HOURS
+
+
+def _correlation_group_counts(open_tickers):
+    """Posiciones abiertas por grupo de correlación (#6).
+    Devuelve dict {group_name: count}."""
+    counts = {}
+    for tk in open_tickers:
+        sector = SECTOR_MAP.get(tk)
+        if not sector:
+            continue
+        for group_name, sectors in CORRELATION_GROUPS.items():
+            if sector in sectors:
+                counts[group_name] = counts.get(group_name, 0) + 1
+    return counts
+
+
+def _get_correlation_groups_for_sector(sector):
+    """Grupos de correlación a los que pertenece un sector."""
+    groups = []
+    for group_name, sectors in CORRELATION_GROUPS.items():
+        if sector in sectors:
+            groups.append(group_name)
+    return groups
+
+
+def _compute_dynamic_stop(ticker, atr_pct):
+    """Stop combinando ATR y ADR (#11). Toma el más permisivo."""
+    atr_stop = None
+    if atr_pct is not None:
+        atr_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ATR_STOP_MULT * atr_pct)), 2)
+    if not ADR_STOP_ENABLED:
+        return atr_stop if atr_stop is not None else PAPER2_STOP_LOSS
+    adr_pct = calc_adr_pct(ticker, lookback=ADR_LOOKBACK_DAYS)
+    if adr_pct is None:
+        return atr_stop if atr_stop is not None else PAPER2_STOP_LOSS
+    adr_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ADR_STOP_MULT * adr_pct)), 2)
+    if atr_stop is None:
+        return adr_stop
+    # Toma el más permisivo (más negativo, o sea más alejado de 0)
+    return min(atr_stop, adr_stop)
+
+
+def _detect_false_breakout(pos, hours_held, ret_pct, current_price, row):
+    """(#12) Devuelve True si detecta patrón de false breakout:
+    - Dentro de las primeras 4h
+    - El peak llegó a +1% pero ahora el precio está a -0.5%
+    - Con volumen alto (vol_rel > 1.3)
+    """
+    if not FALSE_BREAKOUT_ENABLED:
+        return False
+    if hours_held > FALSE_BREAKOUT_MAX_HOURS:
+        return False
+    peak_price = pos.get("peak_price", pos["entry_price"])
+    entry_price = pos["entry_price"]
+    if entry_price <= 0:
+        return False
+    peak_ret = (peak_price - entry_price) / entry_price * 100
+    if peak_ret < FALSE_BREAKOUT_TOUCH_PCT:
+        return False  # nunca llegó a tocar +1%
+    if ret_pct > FALSE_BREAKOUT_RETURN_PCT:
+        return False  # aún no ha caído al nivel crítico
+    vol_rel = row.get("vol_rel") if row else None
+    if vol_rel is None or vol_rel < FALSE_BREAKOUT_MIN_VOL_REL:
+        return False  # volumen normal = no es capitulación
+    return True
+
+
+def _check_liquidity_shock(pos, row):
+    """(#17) Si vol_rel < 0.3 sostenido ≥2h → salir. Usa 'liquidity_shock_start'
+    persistido en pos para trackear la duración."""
+    if not LIQUIDITY_SHOCK_ENABLED or row is None:
+        return False, None
+    vol_rel = row.get("vol_rel")
+    if vol_rel is None:
+        return False, pos.get("liquidity_shock_start")
+    now_dt = datetime.now()
+    shock_start = pos.get("liquidity_shock_start")
+    if vol_rel < LIQUIDITY_SHOCK_VOL_REL:
+        if shock_start is None:
+            # Primer tick con volumen muy bajo — iniciar contador
+            return False, now_dt.strftime("%Y-%m-%d %H:%M")
+        try:
+            start_dt = datetime.strptime(shock_start, "%Y-%m-%d %H:%M")
+            duration = (now_dt - start_dt).total_seconds() / 3600
+            if duration >= LIQUIDITY_SHOCK_HOURS:
+                return True, shock_start
+        except Exception:
+            return False, None
+        return False, shock_start
+    else:
+        # Volumen recuperado — resetear contador
+        return False, None
+
+
+def _is_dd_circuit_active():
+    """(#23) Circuit breaker propio: pausa entradas si hay drawdown severo."""
+    if not DD_CIRCUIT_BREAKER_ENABLED:
+        return False, None
+    daily_dd = _compute_dd_window(24)
+    weekly_dd = _compute_dd_window(168)
+    if daily_dd <= DD_CIRCUIT_DAILY_THRESHOLD:
+        return True, f"daily DD {daily_dd:.1f}% <= {DD_CIRCUIT_DAILY_THRESHOLD}%"
+    if weekly_dd <= DD_CIRCUIT_WEEKLY_THRESHOLD:
+        return True, f"weekly DD {weekly_dd:.1f}% <= {DD_CIRCUIT_WEEKLY_THRESHOLD}%"
+    return False, None
+
+
+def _effective_min_score(ticker, row, current_regime):
+    """Score mínimo aplicable teniendo en cuenta parche BULL_QUIET (#3)."""
+    if not BULL_QUIET_PATCH_ENABLED:
+        return PAPER2_MIN_SCORE
+    if current_regime != "BULL_QUIET":
+        return PAPER2_MIN_SCORE
+    # En BULL_QUIET exigimos rel_strength suficientemente positivo
+    rel = row.get("rel_strength") if row else None
+    if rel is not None and rel >= BULL_QUIET_MIN_REL:
+        return BULL_QUIET_MIN_SCORE
+    return PAPER2_MIN_SCORE
+
+
 def run_trading(market_data):
-    with paper2_lock:
+    with paper2_lock, storage.batch_transaction():
         now_dt = datetime.now()
         now_str = now_dt.strftime("%Y-%m-%d %H:%M")
         _utc_now = datetime.now(tz=_UTC)  # para checks de horario de mercado
@@ -168,15 +387,13 @@ def run_trading(market_data):
                 if 20*60+15 <= _mins_utc <= 21*60:
                     trailing_pct = round(max(trailing_pct * 0.55, 0.8), 2)
 
-            # ── Stop dinámico por ATR ─────────────────────────────────────────
-            if atr_pct is not None:
-                dynamic_stop = -round(max(ATR_STOP_MIN, min(ATR_STOP_MAX, ATR_STOP_MULT * atr_pct)), 2)
-            else:
-                dynamic_stop = PAPER2_STOP_LOSS
+            # ── Stop dinámico por ATR + ADR (v15 #11) ────────────────────────
+            dynamic_stop = _compute_dynamic_stop(ticker, atr_pct)
 
             # ── Trailing dinámico por régimen ─────────────────────────────────
             if is_mom_trade:
-                take_profit = MOM_TAKE_PROFIT
+                # V15 #7: take profit más alto en momentum (ratchet ya protege desde +3%)
+                take_profit = MOM_TAKE_PROFIT_V15
             else:
                 scoring_regime = get_market_regime()
                 take_profit = TAKE_PROFIT_BY_REGIME.get(scoring_regime, PAPER2_TAKE_PROFIT)
@@ -189,6 +406,9 @@ def run_trading(market_data):
                 max_hours = MOM_MAX_HOURS if is_mom_trade else PAPER2_MAX_HOURS
 
             # ── Lógica de salida ──────────────────────────────────────────────
+            # V15 #17: liquidity shock check (resetea peak si vuelve el volumen)
+            liq_shock_exit, liq_shock_start_new = _check_liquidity_shock(pos, row)
+
             if not trailing_active and ret_pct > take_profit:
                 trailing_active = True
                 peak_price = current_price
@@ -268,29 +488,45 @@ def run_trading(market_data):
             # Cooldown diferenciado: stop loss = fallo real (48h), trailing/score/tiempo = OK (24h)
             is_stop_loss_exit = False
             if ret_pct <= dynamic_stop:
-                exit_reason = f"Stop loss {ret_pct:.1f}% (ATR stop {dynamic_stop:.1f}%)"
+                exit_reason = f"Stop loss {ret_pct:.1f}% (stop {dynamic_stop:.1f}%)"
                 is_stop_loss_exit = True
+            # V15 #12 — false breakout: salir ANTES de que llegue al stop
+            elif _detect_false_breakout(pos, hours_held, ret_pct, current_price, row):
+                exit_reason = f"False breakout: peak alcanzado pero retornó a {ret_pct:.1f}% con vol alto"
+                is_stop_loss_exit = False  # salida técnica, no stop completo
+            # V15 #17 — liquidity shock: 2h con vol_rel < 0.3
+            elif liq_shock_exit:
+                exit_reason = f"Liquidity shock: vol_rel < {LIQUIDITY_SHOCK_VOL_REL} durante >{LIQUIDITY_SHOCK_HOURS}h"
+                is_stop_loss_exit = False
             # ── Ratchet floor: si ret cayó por debajo del suelo garantizado ──
-            # Tiene prioridad sobre trailing clásico porque el suelo es más alto
             elif RATCHET_ENABLED and ratchet_floor > 0 and ret_pct < ratchet_floor:
                 exit_reason = f"Ratchet floor: ret {ret_pct:.1f}% < suelo +{ratchet_floor:.1f}%"
             elif trailing_active and trailing_drop <= -trailing_pct:
                 exit_reason = f"Trailing stop {trailing_drop:.1f}% (ATR:{trailing_pct}%)"
-            elif trailing_active and isinstance(current_score, (int, float)) and current_score < PAPER2_MIN_SCORE:
+            # V15 #1: NO cerrar por score bajo si el trailing ya está activo
+            # El score baja naturalmente cuando el ticker rebota — es señal de éxito, no de peligro
+            elif (not IGNORE_SCORE_ON_TRAILING
+                  and trailing_active and isinstance(current_score, (int, float)) and current_score < PAPER2_MIN_SCORE):
                 exit_reason = f"Score bajó a {current_score}"
-            # ── Salida anticipada dinámica ────────────────────────────────────
-            # Si el score cayó y ya hay beneficio suficiente, no esperar a hold_hours
-            # Libera capital para nuevas señales mejores
+            # ── Salida anticipada dinámica (#4 reforzada con rel_strength) ───
+            # Solo disparar si además de score bajo hay deterioro real de rel_strength
             elif (EARLY_EXIT_ENABLED
                   and not trailing_active
                   and hours_held >= EARLY_EXIT_MIN_HOURS
                   and ret_pct >= EARLY_EXIT_MIN_RET
                   and current_score is not None
                   and current_score < EARLY_EXIT_MAX_SCORE):
-                exit_reason = f"Salida anticipada: ret {ret_pct:.1f}% con score {current_score} < {EARLY_EXIT_MAX_SCORE}"
-                # Cooldown corto para evitar reentrada inmediata por modo momentum
-                # con score bajo (el score bajó por algo — no reentrar en 24h)
-                is_stop_loss_exit = False   # cooldown TRAILING_HOURS (24h), no stop
+                # V15 #4: confirmar con deterioro de rel_strength vs entrada
+                rel_now = row.get("rel_strength") if row else None
+                rel_entry = pos.get("entry_rel_strength")
+                rel_ok_to_exit = True  # por defecto sí, si no hay datos de rel
+                if rel_entry is not None and rel_now is not None:
+                    rel_delta = rel_now - rel_entry
+                    # Solo salir si rel empeoró en más de EARLY_EXIT_REL_DETERIORATION
+                    rel_ok_to_exit = (rel_delta <= -EARLY_EXIT_REL_DETERIORATION)
+                if rel_ok_to_exit:
+                    exit_reason = f"Salida anticipada: ret {ret_pct:.1f}% con score {current_score} < {EARLY_EXIT_MAX_SCORE}"
+                    is_stop_loss_exit = False
             elif hours_held >= hold_hours:
                 if ret_pct >= 0:
                     if isinstance(current_score, (int, float)) and current_score >= PAPER2_MIN_SCORE:
@@ -318,9 +554,8 @@ def run_trading(market_data):
                     "trailing_active": trailing_active, "trailing_pct": trailing_pct,
                 })
                 storage.remove_open_position(ticker)
-                # Cooldown diferenciado: stop loss / pérdida prolongada → 48h
-                #                        trailing / score / tiempo → 24h
-                cooldown_h = COOLDOWN_STOP_HOURS if is_stop_loss_exit else COOLDOWN_TRAILING_HOURS
+                # Cooldown asimétrico por resultado (V15 #5)
+                cooldown_h = _cooldown_hours_for(ret_pct, is_stop_loss_exit)
                 storage.set_cooldown(ticker, (now_dt + timedelta(hours=cooldown_h)).strftime("%Y-%m-%d %H:%M"))
                 _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
                 _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name",""), round(ret_pct,2), round(pnl_eur,2), exit_reason, "EUR")
@@ -417,6 +652,7 @@ def run_trading(market_data):
                     "tranche_2_done": int(tranche_2_done),
                     "dca_tranche": _dca_tranche if DCA_ENTRY_ENABLED else int(pos.get("dca_tranche", 3)),
                     "ratchet_floor": round(ratchet_floor, 2),
+                    "liquidity_shock_start": liq_shock_start_new,   # V15 #17
                 })
 
         # ── Régimen de mercado ─────────────────────────────────────────────────
@@ -466,10 +702,26 @@ def run_trading(market_data):
         if vix_breaker_active:
             log.warning("[vix-breaker] VIX SMA5=%.1f > %.1f — nuevas entradas pausadas", vix_now, VIX_CIRCUIT_BREAKER_LEVEL)
 
+        # ── V15 #23: DD Circuit Breaker propio ─────────────────────────────────
+        dd_breaker_active, dd_reason = _is_dd_circuit_active()
+        if dd_breaker_active:
+            log.warning("[dd-breaker] %s — nuevas entradas pausadas", dd_reason)
+
+        # ── V15 #14: Meta-sizing por drawdown ──────────────────────────────────
+        current_dd = _compute_current_drawdown()
+        meta_mult = 1.0
+        if META_SIZING_ENABLED and current_dd <= META_SIZING_DD_THRESHOLD:
+            meta_mult = META_SIZING_REDUCTION
+            log.info("[meta-sizing] DD %.1f%% <= %.1f%% → sizing %.0f%%",
+                     current_dd, META_SIZING_DD_THRESHOLD, meta_mult * 100)
+
         # Base para position sizing: capital inicial fijo (evita shrinkage)
         pos_base = PAPER2_INITIAL_CAP if POS_SIZE_ON_INITIAL_CAP else capital
 
-        if not vix_breaker_active:
+        # ── V15 #6: pre-calcular correlation group counts ──────────────────────
+        corr_group_counts = _correlation_group_counts(open_tickers) if CORRELATION_LIMIT_ENABLED else {}
+
+        if not vix_breaker_active and not dd_breaker_active:
             for ticker, row in ticker_map.items():
                 if ticker in NON_TRADEABLE: continue
                 if ticker in cooldowns or ticker in open_tickers: continue
@@ -491,9 +743,21 @@ def run_trading(market_data):
 
                 score = row.get("inv_score")
 
-                is_dip  = isinstance(score, (int, float)) and score >= PAPER2_MIN_SCORE
+                # V15 #3: umbral efectivo (puede bajar a BULL_QUIET_MIN_SCORE en bull tranquilo con rel fuerte)
+                effective_min_score = _effective_min_score(ticker, row, get_market_regime())
+
+                is_dip  = isinstance(score, (int, float)) and score >= effective_min_score
                 is_mom  = regime == "momentum" and is_momentum_candidate(row)
+                # trade_mode siempre uno de los conocidos (dip_buying/momentum/...)
+                # — el patch se identifica por log, no por nuevo modo
                 trade_mode = "dip_buying" if is_dip else ("momentum" if is_mom else None)
+                _patched = (is_dip and BULL_QUIET_PATCH_ENABLED
+                            and effective_min_score < PAPER2_MIN_SCORE
+                            and isinstance(score, (int, float))
+                            and score < PAPER2_MIN_SCORE)
+                if _patched:
+                    log.info("[bull_quiet_patch] %s entrada con score %s (umbral relajado %s)",
+                             ticker, score, effective_min_score)
 
                 # ── Estrategia: RSI Divergence ────────────────────────────────
                 # Divergencia RSI alcista = señal de alta convicción aunque score < 85
@@ -547,6 +811,24 @@ def run_trading(market_data):
                     if _sector_count >= SECTOR_MAX_POSITIONS:
                         continue   # sector saturado
 
+                # ── V15 #6: Correlation group limit ──────────────────────────────
+                if CORRELATION_LIMIT_ENABLED and ticker in SECTOR_MAP:
+                    _sector_of_ticker = SECTOR_MAP[ticker]
+                    _groups_of_ticker = _get_correlation_groups_for_sector(_sector_of_ticker)
+                    _saturated = False
+                    for _group in _groups_of_ticker:
+                        if corr_group_counts.get(_group, 0) >= CORRELATION_MAX_POSITIONS:
+                            _saturated = True
+                            break
+                    if _saturated:
+                        continue  # grupo correlacionado saturado
+
+                # ── V15 #15: Earnings blackout ───────────────────────────────────
+                if EARNINGS_BLACKOUT_ENABLED and ticker in ALPACA_TRADEABLE:
+                    if has_earnings_soon(ticker, hours_ahead=EARNINGS_BLACKOUT_HOURS):
+                        log.debug("[earnings] %s skip — earnings en <%dh", ticker, EARNINGS_BLACKOUT_HOURS)
+                        continue
+
                 # ── Filtro de gap overnight ───────────────────────────────────────
                 # Gap down > 3% = noticias negativas (earnings miss, downgrades)
                 # RSI oversold en estos casos no es fiable como en caídas graduales
@@ -562,6 +844,16 @@ def run_trading(market_data):
                     pos_pct = POS_PCT_MED_VOL
                 else:
                     pos_pct = POS_PCT_HIGH_VOL
+
+                # V15 #2: multiplicador por bucket de score
+                score_mult = _score_size_multiplier(score)
+                pos_pct = pos_pct * score_mult
+
+                # V15 #14: meta-sizing por drawdown
+                pos_pct = pos_pct * meta_mult
+
+                # Cap absoluto
+                pos_pct = min(pos_pct, SCORE_SIZING_MAX_PCT)
 
                 # Tamaño fijo sobre capital inicial — no se reduce con posiciones abiertas
                 position_size = pos_base * pos_pct
@@ -606,9 +898,16 @@ def run_trading(market_data):
                     "trade_mode": trade_mode,
                     "dca_pending_eur": _dca_pending,
                     "dca_tranche": 1,
+                    # V15: snapshot para early exit con rel_strength
+                    "entry_rel_strength": row.get("rel_strength"),
                 }, cost_eur=_dca_size)
                 capital -= _dca_size
                 open_tickers.add(ticker)
+                # Actualizar contadores de grupo tras esta entrada
+                if CORRELATION_LIMIT_ENABLED and ticker in SECTOR_MAP:
+                    _sec = SECTOR_MAP[ticker]
+                    for _g in _get_correlation_groups_for_sector(_sec):
+                        corr_group_counts[_g] = corr_group_counts.get(_g, 0) + 1
                 if ticker in ALPACA_TRADEABLE and alpaca_api.alpaca_enabled():
                     _alpaca_pool.submit(alpaca_api.place_order, ticker, "buy", notional_usd)
                 _tg_pool.submit(
@@ -682,7 +981,7 @@ def sell_manual(ticker, market_data):
             "hours_held": pos.get("hours_held"), "trailing_active": pos.get("trailing_active", False),
             "trailing_pct": pos.get("trailing_pct"),
         })
-        storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=COOLDOWN_TRAILING_HOURS)).strftime("%Y-%m-%d %H:%M"))
+        storage.set_cooldown(ticker, (datetime.now() + timedelta(hours=_cooldown_hours_for(ret_pct, False))).strftime("%Y-%m-%d %H:%M"))
         _alpaca_pool.submit(alpaca_api.place_order, ticker, "sell", 0)
         _tg_pool.submit(telegram_alerts.alert_trade_close, ticker, pos.get("name", ""), round(ret_pct, 2), round(pnl_eur, 2), "Venta manual", "EUR")
     return {"status": "sold", "cooldown_hours": COOLDOWN_TRAILING_HOURS}
@@ -761,4 +1060,14 @@ def get_read_only_state(market_data):
         "min_score": PAPER2_MIN_SCORE, "hold_hours": PAPER2_HOLD_HOURS,
         "mom_hold_hours": MOM_HOLD_HOURS,
         "regime": regime_info,
+        # ── V15: métricas nuevas para la UI ────────────────────────────────
+        "v15": {
+            "current_drawdown": round(_compute_current_drawdown(), 2),
+            "daily_drawdown":   round(_compute_dd_window(24), 2),
+            "weekly_drawdown":  round(_compute_dd_window(168), 2),
+            "meta_sizing_active": (META_SIZING_ENABLED and _compute_current_drawdown() <= META_SIZING_DD_THRESHOLD),
+            "dd_breaker_active":  _is_dd_circuit_active()[0],
+            "correlation_counts": _correlation_group_counts(storage.get_open_tickers()) if CORRELATION_LIMIT_ENABLED else {},
+            "vix_intraday_spike": is_vix_intraday_spiking(INTRADAY_VIX_SPIKE_PCT) if INTRADAY_VIX_OVERRIDE_ENABLED else False,
+        },
     }

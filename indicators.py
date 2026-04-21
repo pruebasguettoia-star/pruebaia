@@ -263,6 +263,132 @@ def get_trailing_pct(ticker, hist=None):
     trailing = atr_pct * ATR_TRAILING_MULT
     return round(max(ATR_TRAILING_FLOOR, min(ATR_TRAILING_CAP, trailing)), 2)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V15: ADR (Average Daily Range) — mejora #11
+# ─────────────────────────────────────────────────────────────────────────────
+_adr_cache = {}
+_adr_lock  = threading.Lock()
+_ADR_TTL   = 3600   # 1h
+
+def calc_adr_pct(ticker, hist=None, lookback=20):
+    """ADR = mean((high - low) / close) sobre últimos N días, como %.
+    Más estable que ATR — no incluye gaps. Devuelve float o None."""
+    now = time.monotonic()
+    with _adr_lock:
+        hit = _adr_cache.get(ticker)
+        if hit and (now - hit[0]) < _ADR_TTL:
+            return hit[1]
+    try:
+        if hist is None or hist.empty or len(hist) < lookback + 1:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="2mo", auto_adjust=True)
+        if hist.empty or len(hist) < lookback + 1:
+            return None
+        high = hist["High"].iloc[-lookback:]
+        low  = hist["Low"].iloc[-lookback:]
+        close = hist["Close"].iloc[-lookback:]
+        rng_pct = ((high - low) / close).mean() * 100
+        if math.isfinite(rng_pct) and rng_pct > 0:
+            adr_pct = round(float(rng_pct), 2)
+            with _adr_lock:
+                if len(_adr_cache) >= 150:
+                    oldest = min(_adr_cache, key=lambda k: _adr_cache[k][0])
+                    _adr_cache.pop(oldest, None)
+                _adr_cache[ticker] = (time.monotonic(), adr_pct)
+            return adr_pct
+    except Exception:
+        pass
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V15: Earnings blackout — mejora #15
+# ─────────────────────────────────────────────────────────────────────────────
+_earnings_cache = {}
+_earnings_lock  = threading.Lock()
+_EARNINGS_TTL   = 21600   # 6h
+
+def has_earnings_soon(ticker, hours_ahead=48):
+    """True si hay earnings en las próximas N horas según yfinance.
+    Fail-open: si la API falla o no hay datos → False (no bloquea entradas
+    en ETFs u otros tickers sin earnings)."""
+    now = time.monotonic()
+    with _earnings_lock:
+        hit = _earnings_cache.get(ticker)
+        if hit and (now - hit[0]) < _EARNINGS_TTL:
+            next_earnings_ts = hit[1]
+            if next_earnings_ts is None:
+                return False
+            hours_to = (next_earnings_ts - time.time()) / 3600
+            return 0 < hours_to <= hours_ahead
+    try:
+        t = yf.Ticker(ticker)
+        cal = t.calendar
+        next_ts = None
+        if cal is not None and hasattr(cal, "get"):
+            earnings_date = cal.get("Earnings Date")
+            if isinstance(earnings_date, list) and earnings_date:
+                earnings_date = earnings_date[0]
+            if earnings_date:
+                try:
+                    if hasattr(earnings_date, "timestamp"):
+                        next_ts = earnings_date.timestamp()
+                    elif isinstance(earnings_date, str):
+                        next_ts = datetime.strptime(earnings_date[:10], "%Y-%m-%d").timestamp()
+                except Exception:
+                    next_ts = None
+        with _earnings_lock:
+            if len(_earnings_cache) >= 200:
+                oldest = min(_earnings_cache, key=lambda k: _earnings_cache[k][0])
+                _earnings_cache.pop(oldest, None)
+            _earnings_cache[ticker] = (time.monotonic(), next_ts)
+        if next_ts is None:
+            return False
+        hours_to = (next_ts - time.time()) / 3600
+        return 0 < hours_to <= hours_ahead
+    except Exception:
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V15: Intraday VIX spike — mejora #10
+# ─────────────────────────────────────────────────────────────────────────────
+_vix_intraday_cache = {"price": None, "ts": 0}
+_vix_intraday_lock  = threading.Lock()
+_VIX_INTRADAY_TTL   = 300   # 5 min
+
+def get_vix_intraday():
+    """Precio actual del VIX (^VIX) intradía. Cached 5 min."""
+    now = time.monotonic()
+    with _vix_intraday_lock:
+        if _vix_intraday_cache["price"] is not None and (now - _vix_intraday_cache["ts"]) < _VIX_INTRADAY_TTL:
+            return _vix_intraday_cache["price"]
+    try:
+        t = yf.Ticker("^VIX")
+        hist = t.history(period="1d", interval="5m")
+        if hist.empty:
+            return None
+        price = float(hist["Close"].iloc[-1])
+        if math.isfinite(price):
+            with _vix_intraday_lock:
+                _vix_intraday_cache["price"] = price
+                _vix_intraday_cache["ts"] = now
+            return price
+    except Exception:
+        pass
+    return None
+
+def is_vix_intraday_spiking(spike_pct_threshold=20.0):
+    """True si VIX intradía está >N% sobre el SMA5 del VIX diario.
+    Override a BEAR weights temporalmente."""
+    sma5 = get_vix_sma5()
+    now_vix = get_vix_intraday()
+    if sma5 is None or now_vix is None or sma5 <= 0:
+        return False
+    change_pct = (now_vix - sma5) / sma5 * 100
+    return change_pct >= spike_pct_threshold
+
 # ── SPY + VIX BENCHMARK — cache unificado ────────────────────────────────────
 # Cubre: get_spy_returns, get_spy_regime, get_market_regime (scoring adaptativo)
 _spy_unified_cache = {"hist": None, "returns": None, "regime": None, "scoring_regime": None, "ts": 0}
@@ -401,14 +527,39 @@ def get_spy_regime():
 def get_market_regime():
     """Devuelve el scoring_regime actual: BULL_QUIET | BULL_VOLATILE | BEAR_MODERATE | BEAR_PANIC.
     Cached junto con get_spy_regime. Usado por fetch_ticker para pesos adaptativos.
+
+    V15 #10: si VIX intradía está spike (>20% sobre SMA5 del día), degradar el
+    régimen un nivel temporalmente para activar pesos más defensivos.
     """
     now = time.monotonic()
     with _spy_unified_lock:
         if _spy_unified_cache["scoring_regime"] is not None and (now - _spy_unified_cache["ts"]) < _REGIME_TTL:
-            return _spy_unified_cache["scoring_regime"]
-    _refresh_spy_cache()
-    with _spy_unified_lock:
-        return _spy_unified_cache["scoring_regime"] or "BULL_VOLATILE"
+            base_regime = _spy_unified_cache["scoring_regime"]
+        else:
+            _refresh_spy_cache_needed = True
+            base_regime = None
+
+    if base_regime is None:
+        _refresh_spy_cache()
+        with _spy_unified_lock:
+            base_regime = _spy_unified_cache["scoring_regime"] or "BULL_VOLATILE"
+
+    # V15 #10: VIX intraday spike override (lazy import para evitar ciclo)
+    try:
+        from config import INTRADAY_VIX_OVERRIDE_ENABLED, INTRADAY_VIX_SPIKE_PCT
+        if INTRADAY_VIX_OVERRIDE_ENABLED and is_vix_intraday_spiking(INTRADAY_VIX_SPIKE_PCT):
+            # Degradar un nivel
+            downgrade = {
+                "BULL_QUIET":    "BULL_VOLATILE",
+                "BULL_VOLATILE": "BEAR_MODERATE",
+                "BEAR_MODERATE": "BEAR_PANIC",
+                "BEAR_PANIC":    "BEAR_PANIC",
+            }
+            return downgrade.get(base_regime, base_regime)
+    except Exception:
+        pass
+
+    return base_regime
 
 
 def get_vix_sma5():
@@ -490,10 +641,27 @@ def dist_cache_set(ticker, data):  cache_set(_DIST_CACHE, _dist_lock, ticker, da
 
 # ── FETCH TICKER (main data function) ────────────────────────────────────────
 
+_RETRY_MAX = 2          # 2 reintentos = 3 intentos total
+_RETRY_BACKOFF = [1, 3] # segundos entre reintentos
 
 
 def fetch_ticker(name, ticker):
-    """Fetch all indicators for a single ticker. Returns dict or None."""
+    """Fetch all indicators for a single ticker. Returns dict or None.
+    Retry con backoff exponencial en errores de red/429."""
+    for attempt in range(_RETRY_MAX + 1):
+        result = _fetch_ticker_inner(name, ticker)
+        if result is not None:
+            return result
+        # Si falló y quedan reintentos, esperar con backoff
+        if attempt < _RETRY_MAX:
+            delay = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else 4
+            log.debug("fetch %s: intento %d falló — reintento en %ds", ticker, attempt + 1, delay)
+            time.sleep(delay)
+    return None
+
+
+def _fetch_ticker_inner(name, ticker):
+    """Implementación real de fetch_ticker (sin retry)."""
     try:
         t   = yf.Ticker(ticker)
         now = datetime.now()

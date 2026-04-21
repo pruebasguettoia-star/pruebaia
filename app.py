@@ -73,16 +73,20 @@ from config import ADMIN_TOKEN as _ADMIN_TOKEN
 if not _ADMIN_TOKEN:
     log.warning("ADMIN_TOKEN no configurado — endpoints admin bloqueados (añádelo en Railway Variables)")
 
-# ── RW LOCK para cache (fix #6) ──────────────────────────────────────────────
-# Permite lecturas concurrentes, escritura exclusiva
+# ── RW LOCK para cache — writer-preference (fix starvation) ──────────────────
+# El writer (background_refresh) tiene prioridad: cuando quiere escribir,
+# nuevos readers esperan hasta que el writer termine.
+# Sin esto, requests HTTP continuos bloquean la actualización de datos.
 class RWLock:
     def __init__(self):
-        self._lock = threading.Lock()
         self._readers = 0
         self._readers_lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._writer_waiting = threading.Event()
+        self._writer_waiting.set()  # no hay writer esperando inicialmente
 
     def read_acquire(self):
+        self._writer_waiting.wait()  # si un writer espera, los readers nuevos esperan
         with self._readers_lock:
             self._readers += 1
             if self._readers == 1:
@@ -95,10 +99,12 @@ class RWLock:
                 self._write_lock.release()
 
     def write_acquire(self):
+        self._writer_waiting.clear()  # señalar que un writer quiere entrar
         self._write_lock.acquire()
 
     def write_release(self):
         self._write_lock.release()
+        self._writer_waiting.set()  # permitir nuevos readers
 
 cache = {"data": None, "last_updated": None, "last_refresh_ts": None}
 cache_lock = RWLock()
@@ -204,13 +210,6 @@ def background_refresh():
         paper_engine.init()
     except Exception as e:
         log.critical("paper_engine.init() falló: %s — el hilo de fondo continúa sin trading", e)
-
-    # Corrección puntual de capital (se ejecuta solo una vez)
-    try:
-        import fix_capital
-        fix_capital.run()
-    except Exception as e:
-        log.warning("fix_capital error: %s", e)
 
     # Cargar alerted persistido para no re-alertar tras reinicio
     global alerted

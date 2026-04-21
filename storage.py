@@ -29,6 +29,44 @@ _local = threading.local()
 _db_initialized = False
 
 
+# ── BATCH TRANSACTION CONTEXT MANAGER ────────────────────────────────────────
+# Agrupa múltiples operaciones en 1 solo commit — reduce I/O 70-80%
+# Uso: with batch_transaction(): storage.update_...; storage.add_...;
+_batch_active = threading.local()
+
+class batch_transaction:
+    """Context manager que agrupa todas las operaciones SQL en 1 commit.
+    Sin esto, cada update/add/remove hace su propio commit (~3ms cada uno).
+    Con esto, 30 operaciones se agrupan en 1 commit (~3ms total).
+    """
+    def __enter__(self):
+        _batch_active.active = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        _batch_active.active = False
+        if exc_type is None:
+            try:
+                _conn().commit()
+            except Exception as e:
+                log.error("batch_transaction commit error: %s", e)
+                try:
+                    _conn().rollback()
+                except Exception:
+                    pass
+        else:
+            try:
+                _conn().rollback()
+            except Exception:
+                pass
+        return False  # no suprimir excepciones
+
+def _commit_if_not_batch():
+    """Hace commit solo si NO estamos dentro de un batch_transaction."""
+    if not getattr(_batch_active, 'active', False):
+        _conn().commit()
+
+
 def _ensure_dir():
     """Crea el directorio de datos si no existe."""
     d = os.path.dirname(DB_PATH)
@@ -190,6 +228,9 @@ def init_db():
         ("open_pos",   "dca_tranche",      "INTEGER DEFAULT 3"),
         # v14: trailing ratchet — suelo de ganancia persistido
         ("open_pos",   "ratchet_floor",    "REAL DEFAULT 0"),
+        # ── v15 ────────────────────────────────────────────────────────────
+        ("open_pos",   "entry_rel_strength",   "REAL"),         # para early exit #4
+        ("open_pos",   "liquidity_shock_start", "TEXT"),        # para liquidity shock #17
     ]
     for table, col, col_def in _migrations:
         try:
@@ -209,18 +250,18 @@ def get_capital():
 
 def set_capital(amount):
     _conn().execute("UPDATE state SET capital=? WHERE id=1", (round(amount, 6),))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def add_capital(amount):
     """Suma amount al capital actual (atómico)."""
     _conn().execute("UPDATE state SET capital = capital + ? WHERE id=1", (round(amount, 6),))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def sub_capital(amount):
     _conn().execute("UPDATE state SET capital = capital - ? WHERE id=1", (round(amount, 6),))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_alerted() -> set:
@@ -240,7 +281,7 @@ def save_alerted(alerted: set):
         "UPDATE state SET alerted_json=? WHERE id=1",
         (json.dumps(sorted(alerted)),)
     )
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 # ── OPEN POSITIONS ────────────────────────────────────────────────────────────
@@ -342,12 +383,12 @@ def update_open_position(ticker, updates):
     vals = list(updates.values())
     vals.append(ticker)
     _conn().execute(f"UPDATE open_pos SET {cols} WHERE ticker=?", vals)
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def remove_open_position(ticker):
     _conn().execute("DELETE FROM open_pos WHERE ticker=?", (ticker,))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_open_tickers():
@@ -373,7 +414,7 @@ def add_closed_trade(trade):
         int(trade.get("is_partial", False)),
         trade.get("trade_mode", "dip_buying"),
     ))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_closed_trades(limit=200):
@@ -478,7 +519,7 @@ def add_equity_snapshot(equity):
     if last:
         try:
             last_dt = datetime.strptime(last["date"], "%Y-%m-%d %H:%M")
-            if (datetime.now() - last_dt).total_seconds() < 3600:
+            if (datetime.now() - last_dt).total_seconds() < 14400:  # 4h — reduce writes 75%
                 return
         except Exception:
             pass
@@ -488,7 +529,7 @@ def add_equity_snapshot(equity):
             SELECT id FROM equity_log ORDER BY id DESC LIMIT 2000
         )
     """)
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_equity_log(limit=500):
@@ -504,7 +545,7 @@ def set_cooldown(ticker, until_str):
         "INSERT OR REPLACE INTO cooldowns (ticker, until_date) VALUES (?, ?)",
         (ticker, until_str)
     )
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_cooldowns():
@@ -515,7 +556,7 @@ def get_cooldowns():
 def clean_expired_cooldowns():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     _conn().execute("DELETE FROM cooldowns WHERE until_date <= ?", (now_str,))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_cooldowns_trailing():
@@ -527,7 +568,7 @@ def get_cooldowns_trailing():
 def remove_cooldown(ticker):
     """Elimina el cooldown de un ticker (liberación anticipada)."""
     _conn().execute("DELETE FROM cooldowns WHERE ticker=?", (ticker,))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 # ── RESET ─────────────────────────────────────────────────────────────────────
@@ -627,7 +668,7 @@ def upsert_watchlist(ticker, name, score, signal, rsi, bb_pct):
             last_seen  = excluded.last_seen,
             times_seen = watchlist.times_seen + 1
     """, (ticker, name, score, signal, rsi, bb_pct, now_str))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 def get_watchlist(limit=20):
@@ -642,7 +683,7 @@ def clean_watchlist_stale(hours=48):
     """Elimina entradas no actualizadas en las últimas N horas."""
     cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
     _conn().execute("DELETE FROM watchlist WHERE last_seen < ?", (cutoff,))
-    _conn().commit()
+    _commit_if_not_batch()
 
 
 # ── NO AUTO-INIT — llamar init_db() desde paper_engine.init() ────────────────
